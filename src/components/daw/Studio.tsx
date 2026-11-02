@@ -12,7 +12,7 @@ import {
   type SynthTrack,
 } from "@/lib/daw/types";
 import { getEngine } from "@/lib/daw/engine";
-import { loadCurrent, saveCurrent, saveProject } from "@/lib/daw/storage";
+import { loadCurrent, sanitizeProject, saveCurrent, saveProject } from "@/lib/daw/storage";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,7 +28,7 @@ import { BeatsTab } from "./BeatsTab";
 import { KeysTab, PianoKeyboard } from "./KeysTab";
 import { PadsTab } from "./PadsTab";
 import { MixerTab } from "./MixerTab";
-import { AssistantTab } from "./AssistantTab";
+import { AssistantTabMemo } from "./AssistantTab";
 import { ExportDialog } from "./ExportDialog";
 import { ProjectsDrawer } from "./ProjectsDrawer";
 import { Meter, TabButton } from "./ui";
@@ -62,6 +62,10 @@ export function Studio({ onClose }: { onClose: () => void }) {
   const [projectsOpen, setProjectsOpen] = useState(false);
   const [started, setStarted] = useState(false);
   const stepRef = useRef<(s: number) => void>(() => {});
+  const projectRef = useRef<Project | null>(project);
+  useEffect(() => {
+    projectRef.current = project;
+  }, [project]);
 
   // keep engine in sync while playing
   useEffect(() => {
@@ -75,6 +79,25 @@ export function Studio({ onClose }: { onClose: () => void }) {
     const t = setTimeout(() => saveCurrent(project), 600);
     return () => clearTimeout(t);
   }, [project]);
+
+  // leaving the studio always halts playback and flushes the autosave
+  useEffect(() => {
+    return () => {
+      getEngine().stop();
+      if (projectRef.current) saveCurrent(projectRef.current);
+    };
+  }, []);
+
+  // mouse users should never leave focus stranded on a button — keeps the
+  // spacebar transport shortcut predictable (see keydown handler below)
+  useEffect(() => {
+    const onUp = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && t.tagName === "BUTTON") t.blur();
+    };
+    window.addEventListener("pointerup", onUp);
+    return () => window.removeEventListener("pointerup", onUp);
+  }, []);
 
   // playhead callback
   useEffect(() => {
@@ -96,13 +119,21 @@ export function Studio({ onClose }: { onClose: () => void }) {
       e.stop();
       setPlaying(false);
       setCurrentStep(-1);
-    } else {
+      return;
+    }
+    try {
       setStarted(true);
       await e.sync(project);
       await e.play(project);
       setPlaying(true);
+    } catch (err) {
+      console.error("playback failed", err);
+      toast({
+        title: "Audio blocked",
+        description: "Your browser needs one more tap — press Play again.",
+      });
     }
-  }, [playing, project]);
+  }, [playing, project, toast]);
 
   const playDrumPreview = useCallback(async (sound: DrumSound, vel = 0.9) => {
     setStarted(true);
@@ -121,6 +152,8 @@ export function Studio({ onClose }: { onClose: () => void }) {
     [project.pads]
   );
 
+  const playPadSlot = useCallback((slot: number) => void playPad(slot), [playPad]);
+
   const previewNote = useCallback(
     async (track: SynthTrack, pitch: number) => {
       setStarted(true);
@@ -135,7 +168,16 @@ export function Studio({ onClose }: { onClose: () => void }) {
       const target = ev.target as HTMLElement;
       if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
       const k = ev.key.toLowerCase();
+      if (k === "escape") {
+        // Radix dialogs handle their own Escape; only leave the studio when none is open
+        if (!exportOpen && !projectsOpen) onClose();
+        return;
+      }
       if (k === " ") {
+        // a focused control (menu trigger, tab…) handles Space natively —
+        // don't fight it; only toggle the transport from a neutral focus
+        const ae = document.activeElement as HTMLElement | null;
+        if (ae && (ae.tagName === "BUTTON" || ae.tagName === "A")) return;
         ev.preventDefault();
         void togglePlay();
         return;
@@ -158,7 +200,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [tab, project, selSynth, togglePlay, playPad, previewNote]);
+  }, [tab, project, selSynth, togglePlay, playPad, previewNote, exportOpen, projectsOpen, onClose]);
 
   /* ---------------- assistant fixes ---------------- */
   const applyFix = useCallback(
@@ -204,7 +246,12 @@ export function Studio({ onClose }: { onClose: () => void }) {
     toast({ title: "Project saved", description: `“${p.name}” stays on this device — no account, no cloud.` });
   };
 
-  const loadProject = (p: Project) => {
+  const loadProject = (raw: Project) => {
+    const p = sanitizeProject(raw);
+    if (!p) {
+      toast({ title: "Could not load project", description: "The file looks incomplete or damaged." });
+      return;
+    }
     getEngine().stop();
     setPlaying(false);
     setProject(p);
@@ -216,6 +263,9 @@ export function Studio({ onClose }: { onClose: () => void }) {
     () => (project ? project.tracks.filter((t): t is SynthTrack => t.kind === "synth") : []),
     [project]
   );
+
+  const getLevel = useCallback((id: string) => getEngine().level(id), []);
+  const getMasterLevel = useCallback(() => getEngine().masterLevel(), []);
 
   if (!project || !project.tracks) {
     return (
@@ -405,7 +455,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
             <PadsTab
               project={project}
               updateProject={updateProject}
-              onPlayPad={(s) => void playPad(s)}
+              onPlayPad={playPadSlot}
               flashSlot={flashSlot}
             />
           )}
@@ -413,11 +463,11 @@ export function Studio({ onClose }: { onClose: () => void }) {
             <MixerTab
               project={project}
               updateProject={updateProject}
-              getLevel={(id) => getEngine().level(id)}
-              getMasterLevel={() => getEngine().masterLevel()}
+              getLevel={getLevel}
+              getMasterLevel={getMasterLevel}
             />
           )}
-          {tab === "assistant" && <AssistantTab project={project} onApplyFix={(f) => applyFix(f)} />}
+          {tab === "assistant" && <AssistantTabMemo project={project} onApplyFix={applyFix} />}
         </div>
       </main>
 

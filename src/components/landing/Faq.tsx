@@ -124,10 +124,36 @@ export function FinalCta({ onOpenStudio }: { onOpenStudio: () => void }) {
 }
 
 export function Footer() {
-  const cols: Array<[string, string[]]> = [
-    ["Product", ["Features", "Instruments", "Sampler Kits", "Assistant", "Mixing", "Perform"]],
-    ["Get started", ["Open studio", "How it works", "FAQ", "What's new"]],
-    ["Legal", ["Privacy", "Terms", "Cookies", "Licenses"]],
+  const cols: Array<[string, Array<[string, string]>]> = [
+    [
+      "Product",
+      [
+        ["Features", "#features"],
+        ["Instruments", "#instruments"],
+        ["Sampler Kits", "#kits"],
+        ["Assistant", "#assistant"],
+        ["Mixing", "#mixing"],
+        ["Perform", "#perform"],
+      ],
+    ],
+    [
+      "Get started",
+      [
+        ["Open studio", "#top"],
+        ["How it works", "#how"],
+        ["FAQ", "#faq"],
+        ["What's new", "#features"],
+      ],
+    ],
+    [
+      "Legal",
+      [
+        ["Privacy", "#"],
+        ["Terms", "#"],
+        ["Cookies", "#"],
+        ["Licenses", "#"],
+      ],
+    ],
   ];
   return (
     <footer className="mt-auto border-t border-white/[0.06] bg-[#0c0a08]">
@@ -160,10 +186,10 @@ export function Footer() {
                   {title}
                 </div>
                 <ul className="mt-3 space-y-2">
-                  {links.map((l) => (
+                  {links.map(([l, href]) => (
                     <li key={l}>
                       <a
-                        href={l === "Open studio" ? "#top" : "#"}
+                        href={href}
                         className="text-[13.5px] text-[#c9c0b2] transition-colors hover:text-[#f2a43a]"
                       >
                         {l}

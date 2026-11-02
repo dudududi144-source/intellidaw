@@ -2,7 +2,7 @@
 /*  Local project storage — no login, everything stays on the device   */
 /* ------------------------------------------------------------------ */
 
-import type { Project } from "./types";
+import { defaultPads, type DrumStep, type DrumTrack, type Note, type Project, type SynthTrack, type Track, type Waveform } from "./types";
 
 const KEY = "intellidaw.projects.v1";
 const CURRENT = "intellidaw.current.v1";
@@ -70,6 +70,91 @@ export function isValidProject(p: unknown): p is Project {
   );
 }
 
+/* ---- defensive sanitising for imported / stored projects ---- */
+
+const clamp = (v: unknown, min: number, max: number, fallback: number) => {
+  const n = typeof v === "number" && Number.isFinite(v) ? v : fallback;
+  return Math.min(max, Math.max(min, n));
+};
+
+const WAVEFORMS: Waveform[] = ["sawtooth", "square", "triangle", "sine"];
+
+function sanitizeTrack(t: unknown): Track | null {
+  if (!t || typeof t !== "object") return null;
+  const o = t as Record<string, unknown>;
+  if (typeof o.id !== "string" || typeof o.name !== "string") return null;
+  const strip = {
+    volume: clamp(o.volume, 0, 1.3, 0.85),
+    pan: clamp(o.pan, -1, 1, 0),
+    muted: !!o.muted,
+    solo: !!o.solo,
+    delaySend: clamp(o.delaySend, 0, 1, 0),
+    reverbSend: clamp(o.reverbSend, 0, 1, 0),
+  };
+  if (o.kind === "drum") {
+    const raw = Array.isArray(o.steps) ? (o.steps as DrumStep[]) : [];
+    const steps: DrumStep[] = Array.from({ length: 16 }, (_, i) => ({
+      on: !!raw[i]?.on,
+      vel: clamp(raw[i]?.vel, 0, 1, 0.9),
+    }));
+    return {
+      ...(o as unknown as Omit<DrumTrack, keyof typeof strip | "tune" | "steps">),
+      ...strip,
+      kind: "drum",
+      tune: clamp(o.tune, -12, 12, 0),
+      steps,
+    } as DrumTrack;
+  }
+  if (o.kind === "synth") {
+    const notes: Note[] = Array.isArray(o.notes)
+      ? (o.notes as Note[])
+          .filter((n) => n && typeof n.pitch === "number" && typeof n.step === "number")
+          .map((n) => ({
+            id: typeof n.id === "string" ? n.id : `n${Math.random().toString(36).slice(2, 8)}`,
+            step: clamp(n.step, 0, 15, 0),
+            len: clamp(n.len, 1, 16, 1),
+            pitch: clamp(n.pitch, 12, 108, 60),
+            vel: clamp(n.vel, 0, 1, 0.9),
+          }))
+      : [];
+    return {
+      ...(o as unknown as Omit<SynthTrack, keyof typeof strip | "notes">),
+      ...strip,
+      kind: "synth",
+      waveform: WAVEFORMS.includes(o.waveform as Waveform) ? (o.waveform as Waveform) : "sawtooth",
+      cutoff: clamp(o.cutoff, 0, 1, 0.62),
+      resonance: clamp(o.resonance, 0, 18, 4),
+      attack: clamp(o.attack, 0.004, 1.5, 0.01),
+      decay: clamp(o.decay, 0.02, 1.5, 0.18),
+      sustain: clamp(o.sustain, 0, 1, 0.55),
+      release: clamp(o.release, 0.02, 2, 0.22),
+      detune: clamp(o.detune, 0, 30, 8),
+      octave: clamp(o.octave, -2, 2, 0),
+      glide: !!o.glide,
+      notes,
+    } as SynthTrack;
+  }
+  return null;
+}
+
+/** Normalise any parsed JSON into a safe Project, or null if hopeless. */
+export function sanitizeProject(raw: unknown): Project | null {
+  if (!isValidProject(raw)) return null;
+  const p = raw as Project;
+  const tracks = p.tracks.map(sanitizeTrack).filter((t): t is Track => t !== null);
+  if (!tracks.length) return null;
+  return {
+    id: p.id,
+    name: p.name.slice(0, 60) || "Untitled",
+    bpm: Math.round(clamp(p.bpm, 60, 200, 110)),
+    swing: clamp(p.swing, 0, 0.6, 0.08),
+    masterVolume: clamp(p.masterVolume, 0, 1.3, 0.9),
+    tracks,
+    pads: Array.isArray(p.pads) && p.pads.length === 16 ? p.pads : defaultPads(),
+    updatedAt: typeof p.updatedAt === "number" ? p.updatedAt : Date.now(),
+  };
+}
+
 export function saveCurrent(project: Project) {
   if (typeof window === "undefined") return;
   try {
@@ -84,8 +169,7 @@ export function loadCurrent(): Project | null {
   try {
     const raw = localStorage.getItem(CURRENT);
     if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return isValidProject(parsed) ? parsed : null;
+    return sanitizeProject(JSON.parse(raw));
   } catch {
     return null;
   }

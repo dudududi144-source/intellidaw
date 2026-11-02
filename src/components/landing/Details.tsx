@@ -203,7 +203,7 @@ const STEPS: Array<[string, string, string]> = [
 
 export function HowItWorks() {
   return (
-    <Section>
+    <Section id="how">
       <SectionHead
         kicker="How it works"
         title="Three steps from a blank page to a finished WAV"

@@ -195,11 +195,8 @@ function TourMock({ onFullScreen }: { onFullScreen: () => void }) {
         {SLIDES.map((label, i) => (
           <div
             key={label}
-            className="tour-slide absolute inset-0 flex flex-col"
-            style={{
-              animationDelay: `${i * 9}s`,
-              animationPlayState: paused ? "paused" : "running",
-            }}
+            className={cn("tour-slide tour-slide-" + i, "absolute inset-0 flex flex-col")}
+            style={{ animationPlayState: paused ? "paused" : "running" }}
           >
             <div className="px-5 pt-4 sm:px-7">
               <span className="rounded-full bg-[#f2a43a]/12 px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest text-[#f2a43a]">

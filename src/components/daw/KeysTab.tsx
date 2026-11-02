@@ -266,8 +266,6 @@ export function PianoKeyboard({
     else whites.push(p);
   }
   const whiteW = 100 / whites.length;
-  const blackOf = (whitePitch: number) =>
-    blacks.find((b) => b === whitePitch + 1);
   const keyLabel = (pitch: number) =>
     keyMap ? Object.entries(keyMap).find(([, v]) => v === pitch)?.[0]?.toUpperCase() : null;
 
@@ -291,15 +289,11 @@ export function PianoKeyboard({
         {blacks.map((p) => {
           const whiteIdx = whites.filter((w) => w < p).length;
           const left = `calc(${whiteIdx * whiteW}% - ${whiteW * 0.3}%)`;
-          const isNextTo = blackOf(p - 1) === p;
           return (
             <button
               key={p}
               onPointerDown={() => onPlay(p)}
-              className={cn(
-                "pointer-events-auto absolute top-0 h-[62%] w-[6%] min-w-[22px] rounded-b-md bg-gradient-to-b from-[#24201c] to-[#0d0b09] text-[#a89f91] ring-1 ring-black/60 transition-transform active:translate-y-[1px] active:from-[#f2a43a] active:to-[#c97f1e]",
-                !isNextTo && ""
-              )}
+              className="pointer-events-auto absolute top-0 h-[62%] w-[6%] min-w-[22px] rounded-b-md bg-gradient-to-b from-[#24201c] to-[#0d0b09] text-[#a89f91] ring-1 ring-black/60 transition-transform active:translate-y-[1px] active:from-[#f2a43a] active:to-[#c97f1e]"
               style={{ left }}
               aria-label={pitchName(p)}
             >

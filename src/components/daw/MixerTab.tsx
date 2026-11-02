@@ -1,10 +1,11 @@
 "use client";
 
+import { memo } from "react";
 import type { Project, Track } from "@/lib/daw/types";
 import { cn } from "@/lib/utils";
 import { Meter } from "./ui";
 
-export function MixerTab({
+function MixerTabInner({
   project,
   updateProject,
   getLevel,
@@ -189,3 +190,6 @@ export function MixerTab({
     </div>
   );
 }
+
+/** memoised — the studio re-renders on every playback step */
+export const MixerTab = memo(MixerTabInner);

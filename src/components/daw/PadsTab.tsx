@@ -1,11 +1,11 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 import { defaultPads, type KitPad, type Project } from "@/lib/daw/types";
 import { cn } from "@/lib/utils";
 import { PanelTitle } from "./ui";
 
-export function PadsTab({
+function PadsTabInner({
   project,
   updateProject,
   onPlayPad,
@@ -126,3 +126,6 @@ export function PadsTab({
     </div>
   );
 }
+
+/** memoised — the studio re-renders on every playback step */
+export const PadsTab = memo(PadsTabInner);

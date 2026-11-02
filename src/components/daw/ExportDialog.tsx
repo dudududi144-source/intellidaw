@@ -9,10 +9,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import type { Project } from "@/lib/daw/types";
 import { getEngine } from "@/lib/daw/engine";
-import { downloadBlob, downloadJson } from "@/lib/daw/storage";
+import { downloadBlob, downloadJson, sanitizeProject } from "@/lib/daw/storage";
 
 export function ExportDialog({
   open,
@@ -28,6 +27,7 @@ export function ExportDialog({
   const [bars, setBars] = useState(4);
   const [rendering, setRendering] = useState(false);
   const [done, setDone] = useState(false);
+  const [importErr, setImportErr] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const render = async () => {
@@ -47,13 +47,16 @@ export function ExportDialog({
   const loadFile = async (file: File) => {
     try {
       const text = await file.text();
-      const p = JSON.parse(text) as Project;
-      if (p && Array.isArray(p.tracks)) {
+      const p = sanitizeProject(JSON.parse(text));
+      if (p) {
+        setImportErr(false);
         onLoadProject(p);
         onOpenChange(false);
+      } else {
+        setImportErr(true);
       }
     } catch {
-      /* invalid file */
+      setImportErr(true);
     }
   };
 
@@ -140,6 +143,11 @@ export function ExportDialog({
               e.target.value = "";
             }}
           />
+          {importErr && (
+            <div className="rounded-lg border border-[#e5533d]/30 bg-[#e5533d]/10 px-3 py-2 text-center font-mono text-[11px] text-[#ff9a8a]">
+              That file is not a valid Intellidaw project.
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>

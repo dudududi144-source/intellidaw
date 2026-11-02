@@ -383,6 +383,7 @@ interface Graph {
   channels: Map<string, Channel>;
   delayIn: GainNode;
   reverbIn: GainNode;
+  delayNode: DelayNode;
 }
 
 function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Graph {
@@ -457,7 +458,7 @@ function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Gra
 
     channels.set(t.id, { input, pan, gain, delaySend, reverbSend });
   }
-  return { master, limiter, channels, delayIn, reverbIn };
+  return { master, limiter, channels, delayIn, reverbIn, delayNode: delay };
 }
 
 const graphExtras: { masterAnalyser?: AnalyserNode } = {};
@@ -499,6 +500,7 @@ export class DawEngine {
       // update live params without rebuilding (cheap)
       const anySolo = project.tracks.some((t) => t.solo);
       this.graph.master.gain.setTargetAtTime(volGain(project.masterVolume), ctx.currentTime, 0.03);
+      this.graph.delayNode.delayTime.setTargetAtTime((60 / project.bpm) * 0.75, ctx.currentTime, 0.08);
       for (const t of project.tracks) {
         const ch = this.graph.channels.get(t.id);
         if (!ch) continue;
@@ -541,6 +543,12 @@ export class DawEngine {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     cancelAnimationFrame(this.raf);
+    this.queue = [];
+    // duck the master so ringing tails cut quickly instead of smearing
+    // over the landing page / next playback (play() restores it via sync).
+    if (this.ctx && this.graph) {
+      this.graph.master.gain.setTargetAtTime(0.0001, this.ctx.currentTime, 0.015);
+    }
     this.onStep?.(-1);
   }
 
@@ -700,6 +708,13 @@ export class DawEngine {
     const dur = totalSteps * stepDur + 1.8;
     const off = new OfflineAudioContext(2, Math.ceil(44100 * dur), 44100);
     const graph = buildGraph(off, project, false);
+    // decode user pad samples up-front so they are included in the render
+    const padBufs = new Map<DrumSound, AudioBuffer | null>();
+    for (const pad of project.pads) {
+      if (pad.custom?.dataUrl && !padBufs.has(pad.sound)) {
+        padBufs.set(pad.sound, await this.decodeDataUrl(pad.custom.dataUrl));
+      }
+    }
     const anySolo = project.tracks.some((t) => t.solo);
     let t = 0.05;
     for (let i = 0; i < totalSteps; i++) {
@@ -717,7 +732,7 @@ export class DawEngine {
             scheduleDrum(off, ch.input, track.sound, time, {
               vel: s.vel,
               tune: track.tune,
-              customBuf: padCustomBuffer(project, track.sound),
+              customBuf: padBufs.get(track.sound) ?? null,
             });
           }
         } else {
@@ -733,17 +748,6 @@ export class DawEngine {
     const rendered = await off.startRendering();
     return encodeWav(rendered);
   }
-}
-
-/* decode pad custom samples synchronously-if-cached for offline render */
-const offlineCustomCache = new Map<string, AudioBuffer>();
-export function primeOfflineSample(sound: string, buf: AudioBuffer) {
-  offlineCustomCache.set(sound, buf);
-}
-function padCustomBuffer(project: Project, sound: DrumSound): AudioBuffer | null {
-  const pad = project.pads.find((p) => p.sound === sound);
-  if (pad?.custom?.dataUrl) return offlineCustomCache.get(pad.custom.dataUrl) ?? null;
-  return null;
 }
 
 /* ---------------- WAV encoding ---------------- */

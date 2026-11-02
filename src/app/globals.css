@@ -206,21 +206,26 @@
     transform: translateX(-50%);
   }
 }
-@keyframes tourfade {
-  0%,
-  24% {
-    opacity: 0;
-    transform: translateY(10px) scale(0.985);
-  }
-  33%,
-  90% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-  100% {
-    opacity: 0;
-    transform: translateY(-8px) scale(0.99);
-  }
+/* one 36s cycle, four staggered windows — each slide owns a quarter */
+@keyframes tour-a {
+  0% { opacity: 0; transform: translateY(10px) scale(0.985); }
+  2%, 23% { opacity: 1; transform: translateY(0) scale(1); }
+  25%, 100% { opacity: 0; transform: translateY(-8px) scale(0.99); }
+}
+@keyframes tour-b {
+  0%, 25% { opacity: 0; transform: translateY(10px) scale(0.985); }
+  27%, 48% { opacity: 1; transform: translateY(0) scale(1); }
+  50%, 100% { opacity: 0; transform: translateY(-8px) scale(0.99); }
+}
+@keyframes tour-c {
+  0%, 50% { opacity: 0; transform: translateY(10px) scale(0.985); }
+  52%, 73% { opacity: 1; transform: translateY(0) scale(1); }
+  75%, 100% { opacity: 0; transform: translateY(-8px) scale(0.99); }
+}
+@keyframes tour-d {
+  0%, 75% { opacity: 0; transform: translateY(10px) scale(0.985); }
+  77%, 98% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-8px) scale(0.99); }
 }
 
 .eq-bar {
@@ -237,7 +242,28 @@
   animation: pulsedot 1.6s ease-in-out infinite;
 }
 .tour-slide {
-  animation: tourfade 9s ease-in-out infinite;
+  /* hidden by default; a per-slide animation-name assigns the time window */
+  opacity: 0;
+  animation-duration: 36s;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-fill-mode: both;
+}
+.tour-slide-0 { animation-name: tour-a; }
+.tour-slide-1 { animation-name: tour-b; }
+.tour-slide-2 { animation-name: tour-c; }
+.tour-slide-3 { animation-name: tour-d; }
+.tour-slide-inner {
+  animation: tourpan 9s ease-in-out infinite;
+}
+@keyframes tourpan {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-12px);
+  }
 }
 
 /* DAW grid micro-styles */

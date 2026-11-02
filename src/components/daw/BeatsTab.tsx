@@ -17,20 +17,33 @@ export function BeatsTab({
   const drums = project.tracks.filter((t) => t.kind === "drum");
 
   const toggleStep = (trackId: string, stepIdx: number, shift: boolean) => {
+    const track = drums.find((t) => t.id === trackId);
+    if (!track) return;
+    const cur = track.steps[stepIdx];
+    if (shift && cur.on) {
+      // cycle velocity — no sound
+      updateProject((p) => ({
+        ...p,
+        tracks: p.tracks.map((t) => {
+          if (t.id !== trackId || t.kind !== "drum") return t;
+          const steps = [...t.steps];
+          const vels = [0.55, 0.75, 0.95];
+          const idx = vels.findIndex((v) => Math.abs(v - steps[stepIdx].vel) < 0.09);
+          steps[stepIdx] = { ...steps[stepIdx], vel: vels[(idx + 1) % 3] ?? 0.9 };
+          return { ...t, steps };
+        }),
+      }));
+      return;
+    }
+    // preview outside the state updater so React strict-mode double-invocation
+    // can never double-trigger the sound
+    if (!cur.on) onPreview(track.sound, cur.vel);
     updateProject((p) => ({
       ...p,
       tracks: p.tracks.map((t) => {
         if (t.id !== trackId || t.kind !== "drum") return t;
         const steps = [...t.steps];
-        const cur = steps[stepIdx];
-        if (shift && cur.on) {
-          const vels = [0.55, 0.75, 0.95];
-          const idx = vels.findIndex((v) => Math.abs(v - cur.vel) < 0.09);
-          steps[stepIdx] = { ...cur, vel: vels[(idx + 1) % 3] ?? 0.9 };
-        } else {
-          steps[stepIdx] = { ...cur, on: !cur.on };
-          if (!cur.on) onPreview(t.sound, cur.vel);
-        }
+        steps[stepIdx] = { ...steps[stepIdx], on: !steps[stepIdx].on };
         return { ...t, steps };
       }),
     }));

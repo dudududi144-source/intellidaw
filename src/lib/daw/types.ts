@@ -490,7 +490,7 @@ export const TEMPLATES: Template[] = [
   {
     name: "Blank",
     bpm: 110,
-    tag: "clean",
+    tag: "110",
     build: () => ({
       ...createDefaultProject(),
       id: uid(),

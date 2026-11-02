@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { computeStats, quickScan, type QuickStat } from "@/lib/daw/analysis";
 import type { Project } from "@/lib/daw/types";
 import { PanelTitle } from "./ui";
@@ -16,6 +16,12 @@ const SEV_STYLE: Record<string, { badge: string; text: string; label: string }> 
   improve: { badge: "bg-[#f2a43a] text-[#17120a]", text: "text-[#f2c98a]", label: "IMPROVE" },
   ok: { badge: "bg-[#8fbf6b] text-[#10130a]", text: "text-[#b5e294]", label: "GOOD" },
 };
+
+const norm = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 
 export function AssistantTab({
   project,
@@ -90,10 +96,15 @@ export function AssistantTab({
     }
   };
 
-  const insights: Array<(QuickStat | AiInsight) & { source?: "ai" | "rule" }> = [
-    ...(ai ?? []),
-    ...local.map((q) => ({ ...q, source: "rule" as const })),
-  ];
+  // when AI results exist, hide rule findings the AI already covers
+  const insights: Array<(QuickStat | AiInsight) & { source?: "ai" | "rule" }> = useMemo(() => {
+    if (!ai) return local.map((q) => ({ ...q, source: "rule" as const }));
+    const aiTitles = new Set(ai.map((a) => norm(a.title)));
+    const rules = local.filter(
+      (q) => !aiTitles.has(norm(q.title)) && !ai.some((a) => norm(a.detail).includes(norm(q.title)))
+    );
+    return [...ai, ...rules.map((q) => ({ ...q, source: "rule" as const }))];
+  }, [ai, local]);
 
   return (
     <div className="space-y-4">
@@ -188,3 +199,6 @@ export function AssistantTab({
     </div>
   );
 }
+
+/** memoised — the studio re-renders on every playback step */
+export const AssistantTabMemo = memo(AssistantTab);
