@@ -1,6 +1,7 @@
 /* ------------------------------------------------------------------ */
 /*  Intellidaw — SKAZI Bundle audio engine                             */
-/*  Web Audio implementations of the 19 bundle devices.                */
+/*  Web Audio implementations of the 19 bundle devices, plus the       */
+/*  original "Intellidaw Extras" devices.                              */
 /*  Original DSP code — procedural tables, curves and impulses.        */
 /* ------------------------------------------------------------------ */
 
@@ -369,6 +370,147 @@ function voiceSubich(ctx: BaseAudioContext, dest: AudioNode, p: VoiceParams, pit
   mk("square", p.square);
 }
 
+/* ---------- Intellidaw extras (original devices) ---------- */
+
+/** LIMONANA — iced-mint dream pad: detuned triangle stack + breeze LFO + airy shimmer */
+function voiceLimonana(ctx: BaseAudioContext, dest: AudioNode, p: VoiceParams, pitch: number, vel: number, time: number, dur: number) {
+  const freq = midiHz(pitch + p.octave * 12);
+  const cut = skaziCutoffHz(p.cutoff);
+  const filt = ctx.createBiquadFilter();
+  filt.type = "lowpass";
+  filt.Q.value = p.res;
+  filt.frequency.setValueAtTime(cut, time);
+
+  // slow "breeze" — gentle sine LFO breathing on the filter
+  if (p.breeze > 0.01) {
+    const lfo = ctx.createOscillator();
+    lfo.type = "sine";
+    lfo.frequency.value = p.breezeRate;
+    const la = ctx.createGain();
+    la.gain.value = p.breeze * cut * 0.45;
+    lfo.connect(la).connect(filt.frequency);
+    lfo.start(time);
+    lfo.stop(time + dur + p.release + 2);
+  }
+
+  const { g, end } = envGain(ctx, time, vel, 0.2, p.attack, 0.4, p.sustain, p.release, dur);
+  filt.connect(g).connect(dest);
+
+  const n = Math.round(p.voices);
+  for (let i = 0; i < n; i++) {
+    const o = ctx.createOscillator();
+    o.type = "triangle";
+    const spread = n === 1 ? 0 : ((i / (n - 1)) * 2 - 1) * p.spread;
+    o.frequency.setValueAtTime(freq, time);
+    o.detune.setValueAtTime(spread, time);
+    const og = ctx.createGain();
+    og.gain.value = 1 / Math.sqrt(n);
+    o.connect(og).connect(filt);
+    o.start(time);
+    o.stop(end);
+  }
+
+  // airy "shimmer" — soft noise band above the note
+  if (p.shimmer > 0.01) {
+    const len = Math.ceil(ctx.sampleRate * (dur + p.release + 1));
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+    const nz = ctx.createBufferSource();
+    nz.buffer = buf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = clamp(freq * 4, 800, 12000);
+    bp.Q.value = 1.2;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.0001, time);
+    ng.gain.linearRampToValueAtTime(p.shimmer * 0.05 * vel, time + Math.max(0.05, p.attack));
+    ng.gain.setTargetAtTime(0.0001, time + Math.max(0.1, dur), Math.max(0.05, p.release / 3));
+    nz.connect(bp).connect(ng).connect(dest);
+    nz.start(time);
+    nz.stop(time + dur + p.release + 1);
+  }
+}
+
+/** SABICH — lo-fi crunch keys: wavetable through crush + warm drive with a wobbly filter */
+function voiceSabich(ctx: BaseAudioContext, dest: AudioNode, p: VoiceParams, pitch: number, vel: number, time: number, dur: number) {
+  const freq = midiHz(pitch + p.octave * 12);
+  const cut = skaziCutoffHz(p.cutoff);
+  const filt = ctx.createBiquadFilter();
+  filt.type = "lowpass";
+  filt.Q.value = p.res;
+  filt.frequency.setValueAtTime(cut, time);
+
+  if (p.wobbleAmt > 0.01) {
+    const lfo = ctx.createOscillator();
+    lfo.type = "sine";
+    lfo.frequency.value = p.wobbleRate;
+    const la = ctx.createGain();
+    la.gain.value = p.wobbleAmt * cut * 0.55;
+    lfo.connect(la).connect(filt.frequency);
+    lfo.start(time);
+    lfo.stop(time + dur + p.release + 1);
+  }
+
+  const crush = makeShaper(ctx, "crush", p.crush * 0.85);
+  const drive = makeShaper(ctx, "tube", p.drive * 0.7);
+  const { g, end } = envGain(ctx, time, vel, 0.22, 0.004, p.decay, p.sustain, p.release, dur);
+  filt.connect(crush).connect(drive).connect(g).connect(dest);
+
+  const o = ctx.createOscillator();
+  o.setPeriodicWave(skaziWave(ctx, wtName(p.table)));
+  o.frequency.setValueAtTime(freq, time);
+  o.connect(filt);
+  o.start(time);
+  o.stop(end);
+
+  // subtle sub thump to keep the crunch grounded
+  const s = ctx.createOscillator();
+  s.type = "sine";
+  s.frequency.setValueAtTime(freq * 0.5, time);
+  const sg = ctx.createGain();
+  sg.gain.value = 0.12;
+  s.connect(sg).connect(filt);
+  s.start(time);
+  s.stop(end);
+}
+
+/** MALABI — creamy boom drum: pitched sine drop with soft-clip cream and a gentle click */
+function voiceMalabi(ctx: BaseAudioContext, dest: AudioNode, p: VoiceParams, vel: number, time: number, tune = 0) {
+  const boomHz = clamp((28 + p.boom * 90) * Math.pow(2, tune / 12), 20, 220);
+  const dec = 0.1 + p.decay * 1.1;
+
+  const body = ctx.createOscillator();
+  body.type = "sine";
+  body.frequency.setValueAtTime(boomHz * (1 + p.drop * 2.4), time);
+  body.frequency.exponentialRampToValueAtTime(boomHz, time + Math.max(0.02, dec * 0.28));
+
+  const cream = makeShaper(ctx, "soft", p.cream * 0.75);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, time);
+  g.gain.linearRampToValueAtTime(0.62 * vel, time + 0.004);
+  g.gain.setTargetAtTime(0.0001, time + 0.01, dec / 3);
+  body.connect(cream).connect(g).connect(dest);
+  body.start(time);
+  body.stop(time + dec + 0.6);
+
+  if (p.click > 0.01) {
+    const len = Math.max(64, Math.floor(ctx.sampleRate * 0.02));
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    const nz = ctx.createBufferSource();
+    nz.buffer = buf;
+    const hp = ctx.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 1500;
+    const ng = ctx.createGain();
+    ng.gain.value = p.click * 0.25 * vel;
+    nz.connect(hp).connect(ng).connect(dest);
+    nz.start(time);
+  }
+}
+
 /** TBON 303 / SKACID — single note */
 export function acidNote(
   ctx: BaseAudioContext,
@@ -625,6 +767,10 @@ export function scheduleSkaziVoice(
     case "kube": voiceWavetable(ctx, dest, p, pitch, vel, time, dur, true); break;
     case "subich": voiceSubich(ctx, dest, p, pitch, vel, time, dur); break;
     case "kickass": kickassVoice(ctx, dest, p, vel, time); break;
+    /* Intellidaw extras */
+    case "limonana": voiceLimonana(ctx, dest, p, pitch, vel, time, dur); break;
+    case "sabich": voiceSabich(ctx, dest, p, pitch, vel, time, dur); break;
+    case "malabi": voiceMalabi(ctx, dest, p, vel, time, p.tune ?? 0); break;
   }
 }
 

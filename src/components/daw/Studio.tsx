@@ -13,6 +13,7 @@ import {
 } from "@/lib/daw/types";
 import { getEngine } from "@/lib/daw/engine";
 import { loadCurrent, sanitizeProject, saveCurrent, saveProject } from "@/lib/daw/storage";
+import { peekDeviceSelect } from "@/lib/daw/skazi";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -54,7 +55,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
   const [project, setProject] = useState<Project | null>(() =>
     typeof window !== "undefined" ? loadCurrent() ?? createDefaultProject() : null
   );
-  const [tab, setTab] = useState<Tab>("beats");
+  const [tab, setTab] = useState<Tab>(() => (peekDeviceSelect() ? "skazi" : "beats"));
   const [playing, setPlaying] = useState(false);
   const [currentStep, setCurrentStep] = useState(-1);
   const [selSynth, setSelSynth] = useState<string | null>(null);
@@ -65,6 +66,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
   const [started, setStarted] = useState(false);
   const stepRef = useRef<(s: number) => void>(() => {});
   const projectRef = useRef<Project | null>(project);
+
   useEffect(() => {
     projectRef.current = project;
   }, [project]);

@@ -4,8 +4,10 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import {
   SKAZI_DEVICES,
   SKAZI_FOLDERS,
+  consumeDeviceSelect,
   deviceById,
   devicesInFolder,
+  isExtraDevice,
   defaultSeq,
   emptySeq,
   generatePattern,
@@ -22,6 +24,7 @@ import { SkaziSequencer } from "@/lib/daw/skaziAudio";
 import { getEngine } from "@/lib/daw/engine";
 import { makeDrumTrack, makeSynthTrack, type Project, type SynthTrack } from "@/lib/daw/types";
 import { cn } from "@/lib/utils";
+import { Search, Star } from "lucide-react";
 import { ParamRow, PanelTitle } from "./ui";
 import { PianoKeyboard } from "./KeysTab";
 import { Switch } from "@/components/ui/switch";
@@ -401,7 +404,7 @@ function KickPanel({
   onSet: (id: string, v: number) => void;
   onPreset: (name: string) => void;
 }) {
-  const fire = () => void getEngine().previewSkazi("kickass", 36, 0.01);
+  const fire = () => void getEngine().previewSkazi(device.id, 36, 0.01);
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
       const t = ev.target as HTMLElement;
@@ -640,7 +643,12 @@ export function SkaziTab({
   updateProject: (fn: (p: Project) => Project) => void;
 }) {
   const state = useSkaziState();
-  const [sel, setSel] = useState<string>("skazi");
+  // deep link from the landing page → open the requested device directly
+  const [sel, setSel] = useState<string>(() => {
+    const id = consumeDeviceSelect();
+    return id && deviceById(id) ? id : "skazi";
+  });
+  const [query, setQuery] = useState("");
   const device = deviceById(sel) ?? SKAZI_DEVICES[0];
   void project;
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({
@@ -648,6 +656,7 @@ export function SkaziTab({
     Basslines: true,
     "Drums & FX": false,
     "FX Rack": false,
+    "Intellidaw Extras": true,
   });
 
   const onSet = useCallback(
@@ -660,6 +669,39 @@ export function SkaziTab({
   const fxState = state.fx[sel] ?? { enabled: false, params: {} };
   const seq = state.seq[sel] ?? defaultSeq(sel);
 
+  const q = query.trim().toLowerCase();
+  const matches = (d: SkaziDevice) =>
+    !q || d.name.toLowerCase().includes(q) || d.tagline.toLowerCase().includes(q) || d.folder.toLowerCase().includes(q);
+  const favIds = (state.favorites ?? []).filter((id) => deviceById(id) && matches(deviceById(id)!));
+  const isFav = (state.favorites ?? []).includes(device.id);
+  const bundleCount = SKAZI_DEVICES.filter((d) => !isExtraDevice(d)).length;
+  const extrasCount = SKAZI_DEVICES.length - bundleCount;
+
+  const DeviceRow = ({ d }: { d: SkaziDevice }) => (
+    <li>
+      <button
+        onClick={() => setSel(d.id)}
+        className={cn(
+          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] transition-colors",
+          sel === d.id ? "bg-white/8 font-semibold text-[#f0ece4]" : "text-[#a89f91] hover:bg-white/5"
+        )}
+        aria-current={sel === d.id ? "true" : undefined}
+      >
+        <span
+          className="h-1.5 w-1.5 shrink-0 rounded-full"
+          style={{ background: d.accent, opacity: sel === d.id ? 1 : 0.55 }}
+        />
+        <span className="truncate">{d.name}</span>
+        {d.kind === "fx" && state.fx[d.id]?.enabled && (
+          <span className="ml-auto h-1.5 w-1.5 rounded-full bg-[#8fbf6b] pulse-dot" aria-label="active" />
+        )}
+        {(state.favorites ?? []).includes(d.id) && (
+          <Star className={cn("ml-auto h-3 w-3 shrink-0 text-[#f2a43a]", d.kind === "fx" && state.fx[d.id]?.enabled && "ml-1")} aria-label="favorite" />
+        )}
+      </button>
+    </li>
+  );
+
   return (
     <div className="grid gap-4 lg:grid-cols-[240px_1fr]">
       {/* browser */}
@@ -669,8 +711,21 @@ export function SkaziTab({
             <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#f2a43a]">
               SKAZI Bundle
             </div>
-            <div className="text-[11px] text-[#a89f91]">{SKAZI_DEVICES.length} devices · web edition</div>
+            <div className="text-[11px] text-[#a89f91]">
+              {bundleCount} devices + {extrasCount} extras
+            </div>
           </div>
+        </div>
+
+        <div className="relative mb-2">
+          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#a89f91]" aria-hidden />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search devices…"
+            aria-label="Search SKAZI devices"
+            className="w-full rounded-lg border border-white/8 bg-black/30 py-1.5 pl-7 pr-2 font-mono text-[11px] text-[#f0ece4] placeholder:text-[#a89f91]/50 focus:border-[#f2a43a]/40 focus:outline-none"
+          />
         </div>
 
         <div className="mb-2 rounded-lg border border-[#f2a43a]/20 bg-[#f2a43a]/5 p-2">
@@ -685,54 +740,61 @@ export function SkaziTab({
           </a>
         </div>
 
-        <nav className="space-y-0.5" aria-label="Device folders">
-          {SKAZI_FOLDERS.map((folder) => {
-            const open = openFolders[folder] ?? false;
-            const items = devicesInFolder(folder);
-            return (
-              <div key={folder}>
-                <button
-                  onClick={() => setOpenFolders((o) => ({ ...o, [folder]: !open }))}
-                  className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left font-mono text-[11px] uppercase tracking-wider text-[#c9c0b2] hover:bg-white/5"
-                  aria-expanded={open}
-                >
-                  <span aria-hidden className="text-[#a89f91]">{open ? "▾" : "▸"}</span>
-                  <span aria-hidden>📁</span> {folder}
-                  <span className="ml-auto font-mono text-[9px] text-[#a89f91]/60">{items.length}</span>
-                </button>
-                {open && (
-                  <ul className="ml-3 border-l border-white/5 pl-1">
-                    {items.map((d) => (
-                      <li key={d.id}>
-                        <button
-                          onClick={() => setSel(d.id)}
-                          className={cn(
-                            "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] transition-colors",
-                            sel === d.id ? "bg-white/8 font-semibold text-[#f0ece4]" : "text-[#a89f91] hover:bg-white/5"
-                          )}
-                          aria-current={sel === d.id ? "true" : undefined}
-                        >
-                          <span
-                            className="h-1.5 w-1.5 shrink-0 rounded-full"
-                            style={{ background: d.accent, opacity: sel === d.id ? 1 : 0.55 }}
-                          />
-                          <span className="truncate">{d.name}</span>
-                          {d.kind === "fx" && state.fx[d.id]?.enabled && (
-                            <span className="ml-auto h-1.5 w-1.5 rounded-full bg-[#8fbf6b] pulse-dot" aria-label="active" />
-                          )}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
+        <nav className="max-h-[46vh] space-y-0.5 overflow-y-auto pr-1" aria-label="Device folders">
+          {q === "" && favIds.length > 0 && (
+            <div className="mb-1">
+              <div className="flex items-center gap-1.5 rounded-md px-2 py-1.5 font-mono text-[11px] uppercase tracking-wider text-[#f2a43a]">
+                <Star className="h-3 w-3 fill-current" aria-hidden /> Favorites
+                <span className="ml-auto font-mono text-[9px] text-[#a89f91]/60">{favIds.length}</span>
               </div>
-            );
-          })}
+              <ul className="ml-3 border-l border-[#f2a43a]/20 pl-1">
+                {favIds.map((id) => (
+                  <DeviceRow key={`fav-${id}`} d={deviceById(id)!} />
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {q !== "" ? (
+            <ul className="ml-1 border-l border-white/5 pl-1">
+              {SKAZI_DEVICES.filter(matches).map((d) => (
+                <DeviceRow key={d.id} d={d} />
+              ))}
+              {SKAZI_DEVICES.filter(matches).length === 0 && (
+                <li className="px-2 py-2 font-mono text-[10px] text-[#a89f91]/60">no devices match “{query}”</li>
+              )}
+            </ul>
+          ) : (
+            SKAZI_FOLDERS.map((folder) => {
+              const open = openFolders[folder] ?? false;
+              const items = devicesInFolder(folder);
+              return (
+                <div key={folder}>
+                  <button
+                    onClick={() => setOpenFolders((o) => ({ ...o, [folder]: !open }))}
+                    className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left font-mono text-[11px] uppercase tracking-wider text-[#c9c0b2] hover:bg-white/5"
+                    aria-expanded={open}
+                  >
+                    <span aria-hidden className="text-[#a89f91]">{open ? "▾" : "▸"}</span>
+                    <span aria-hidden>📁</span> {folder}
+                    <span className="ml-auto font-mono text-[9px] text-[#a89f91]/60">{items.length}</span>
+                  </button>
+                  {open && (
+                    <ul className={cn("ml-3 border-l border-white/5 pl-1", folder === "Intellidaw Extras" && "border-[#7fd4c1]/25")}>
+                      {items.map((d) => (
+                        <DeviceRow key={d.id} d={d} />
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              );
+            })
+          )}
         </nav>
 
         <p className="mt-3 border-t border-white/5 pt-2 font-mono text-[9px] leading-relaxed text-[#a89f91]/70">
-          All 19 free tools by Asher Swissa (SKAZI), rebuilt as browser-native devices for
-          Intellidaw. Original code, no downloads needed.
+          All {bundleCount} free tools by Asher Swissa (SKAZI), rebuilt as browser-native devices —
+          plus {extrasCount} Intellidaw originals. Original code, no downloads needed.
         </p>
       </aside>
 
@@ -748,8 +810,43 @@ export function SkaziTab({
           <span className="rounded-full border border-white/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[#a89f91]">
             {project.bpm} BPM
           </span>
-          <span className="ml-auto rounded-full border border-white/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[#a89f91]">
+          <span className="rounded-full border border-white/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[#a89f91]">
             {device.folder}
+          </span>
+          {isExtraDevice(device) && (
+            <span
+              className="rounded-full border px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest"
+              style={{ borderColor: `${device.accent}55`, color: device.accent }}
+            >
+              Intellidaw original
+            </span>
+          )}
+          <span className="ml-auto flex items-center gap-1.5">
+            {device.kind !== "fx" && device.kind !== "generator" && (
+              <button
+                onClick={() => skaziStore.randomizeInstrument(device.id)}
+                className="rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-wider text-[#a89f91] transition-colors hover:border-[#f2a43a]/40 hover:text-[#f0ece4]"
+                title="Randomize this patch"
+                aria-label={`Randomize ${device.name} patch`}
+              >
+                🎲 Random
+              </button>
+            )}
+            <button
+              onClick={() => skaziStore.toggleFavorite(device.id)}
+              className={cn(
+                "flex items-center gap-1 rounded-lg border px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-wider transition-colors",
+                isFav
+                  ? "border-[#f2a43a]/50 bg-[#f2a43a]/10 text-[#f2a43a]"
+                  : "border-white/10 bg-white/[0.03] text-[#a89f91] hover:border-[#f2a43a]/40 hover:text-[#f0ece4]"
+              )}
+              aria-pressed={isFav}
+              aria-label={isFav ? `Remove ${device.name} from favorites` : `Add ${device.name} to favorites`}
+              title="Favorite"
+            >
+              <Star className={cn("h-3 w-3", isFav && "fill-current")} />
+              {isFav ? "Faved" : "Fav"}
+            </button>
           </span>
         </div>
 

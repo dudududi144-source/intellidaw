@@ -9,7 +9,7 @@ import { uid, type Note } from "./types";
 
 /* ---------------- folders & kinds ---------------- */
 
-export type SkaziFolder = "Synths" | "Basslines" | "Drums & FX" | "FX Rack";
+export type SkaziFolder = "Synths" | "Basslines" | "Drums & FX" | "FX Rack" | "Intellidaw Extras";
 export type SkaziKind = "synth" | "sequencer" | "kick" | "riser" | "generator" | "fx";
 
 export interface SkaziParam {
@@ -529,11 +529,109 @@ export const SKAZI_DEVICES: SkaziDevice[] = [
   },
 ];
 
+/* ---------------- Intellidaw extras (original devices) ---------------- */
+
+const extras: SkaziDevice[] = [
+  {
+    id: "limonana",
+    name: "LIMONANA",
+    folder: "Intellidaw Extras",
+    kind: "synth",
+    tagline: "Iced-mint dream pad",
+    desc: "Intellidaw original — a frosty detuned pad with a slow breeze filter and airy shimmer. Made for long psy breakdowns.",
+    accent: "#7fd4c1",
+    params: [
+      f("voices", "VOICES", 1, 5, 3, { step: 1, fmt: (v) => `${v} vce` }),
+      f("spread", "SPREAD", 0, 40, 14, { step: 1, fmt: (v) => `${v} ct` }),
+      f("octave", "OCTAVE", -2, 2, 0, { step: 1, fmt: semis }),
+      f("cutoff", "CUTOFF", 0.05, 1, 0.5, { fmt: hzN }),
+      f("res", "RESO", 0, 14, 2, { step: 0.1 }),
+      f("breeze", "BREEZE LFO", 0, 1, 0.4, { fmt: pct }),
+      f("breezeRate", "LFO RATE", 0.05, 2, 0.22, { fmt: (v) => `${v.toFixed(2)}Hz` }),
+      f("shimmer", "SHIMMER", 0, 1, 0.3, { fmt: pct }),
+      f("attack", "ATTACK", 0.01, 3, 0.7, { fmt: (v) => `${(v * 1000) | 0}ms` }),
+      f("sustain", "SUSTAIN", 0, 1, 0.8, { fmt: pct }),
+      f("release", "RELEASE", 0.05, 4, 1.8, { fmt: (v) => `${(v * 1000) | 0}ms` }),
+    ],
+    presets: {
+      "Mint Breakdown": { voices: 4, spread: 18, cutoff: 0.52, breeze: 0.5, shimmer: 0.35, attack: 0.9, release: 2.2 },
+      "Ice Pluck": { voices: 2, spread: 8, cutoff: 0.6, breeze: 0.2, shimmer: 0.5, attack: 0.005, sustain: 0.05, release: 0.3 },
+      "Frosty Cloud": { voices: 5, spread: 26, cutoff: 0.4, breeze: 0.7, breezeRate: 0.12, shimmer: 0.25, attack: 1.6, release: 3.2 },
+    },
+  },
+  {
+    id: "sabich",
+    name: "SABICH",
+    folder: "Intellidaw Extras",
+    kind: "synth",
+    tagline: "Lo-fi crunch keys",
+    desc: "Intellidaw original — crushed lo-fi keys with a wobbly filter and a warm drive. Street-food grit for your loops.",
+    accent: "#d99a5b",
+    params: [
+      f("table", "TABLE", 0, 7, 6, { step: 1, options: WT_NAMES, fmt: (v) => WT_NAMES[v | 0] }),
+      f("crush", "CRUSH", 0, 1, 0.55, { fmt: pct }),
+      f("drive", "DRIVE", 0, 1, 0.35, { fmt: pct }),
+      f("octave", "OCTAVE", -2, 2, 0, { step: 1, fmt: semis }),
+      f("cutoff", "CUTOFF", 0.05, 1, 0.42, { fmt: hzN }),
+      f("res", "RESO", 0, 18, 7, { step: 0.1 }),
+      f("wobbleRate", "WOBBLE", 0.1, 12, 3.2, { fmt: (v) => `${v.toFixed(1)}Hz` }),
+      f("wobbleAmt", "WOBBLE AMT", 0, 1, 0.35, { fmt: pct }),
+      f("decay", "DECAY", 0.02, 2, 0.24, { fmt: (v) => `${(v * 1000) | 0}ms` }),
+      f("sustain", "SUSTAIN", 0, 1, 0.25, { fmt: pct }),
+      f("release", "RELEASE", 0.02, 2, 0.25, { fmt: (v) => `${(v * 1000) | 0}ms` }),
+    ],
+    presets: {
+      "Pita Crunch": { table: 6, crush: 0.6, drive: 0.4, cutoff: 0.4, wobbleAmt: 0.3, decay: 0.2 },
+      "Deep Fry": { table: 2, crush: 0.85, drive: 0.7, cutoff: 0.3, res: 12, wobbleRate: 6, wobbleAmt: 0.5 },
+      "Eggplant keys": { table: 3, crush: 0.35, drive: 0.2, cutoff: 0.55, decay: 0.5, sustain: 0.5 },
+    },
+  },
+  {
+    id: "malabi",
+    name: "MALABI",
+    folder: "Intellidaw Extras",
+    kind: "kick",
+    tagline: "Creamy boom drum",
+    desc: "Intellidaw original — a silky long-tail boom with a soft cream drive. The dessert your low end deserves.",
+    accent: "#e8b7c8",
+    params: [
+      f("boom", "BOOM", 0.15, 0.8, 0.34, { fmt: (v) => `${Math.round(28 + v * 90)}Hz` }),
+      f("drop", "DROP", 0, 1, 0.55, { fmt: (v) => `×${(1 + v * 2.4).toFixed(1)}` }),
+      f("decay", "DECAY", 0.1, 1.2, 0.55, { fmt: (v) => `${(v * 1100) | 0}ms` }),
+      f("click", "CLICK", 0, 1, 0.15, { fmt: pct }),
+      f("cream", "CREAM", 0, 1, 0.4, { fmt: pct }),
+      f("tune", "TUNE", -12, 12, 0, { step: 1, fmt: semis }),
+    ],
+    presets: {
+      "Silky Boom": { boom: 0.3, drop: 0.5, decay: 0.65, cream: 0.45, click: 0.1 },
+      "Dessert Punch": { boom: 0.42, drop: 0.75, decay: 0.35, cream: 0.6, click: 0.35 },
+      "Night Sub": { boom: 0.2, drop: 0.4, decay: 0.95, cream: 0.25, click: 0.05 },
+    },
+  },
+];
+
+SKAZI_DEVICES.push(...extras);
+
 /* ---------------- helpers ---------------- */
 
 export const deviceById = (id: string) => SKAZI_DEVICES.find((d) => d.id === id);
 export const devicesInFolder = (folder: SkaziFolder) => SKAZI_DEVICES.filter((d) => d.folder === folder);
-export const SKAZI_FOLDERS: SkaziFolder[] = ["Synths", "Basslines", "Drums & FX", "FX Rack"];
+export const SKAZI_FOLDERS: SkaziFolder[] = ["Synths", "Basslines", "Drums & FX", "FX Rack", "Intellidaw Extras"];
+
+/** original Intellidaw devices, not part of the SKAZI bundle */
+export const isExtraDevice = (d: SkaziDevice) => d.folder === "Intellidaw Extras";
+
+/* -------- deep-link support (landing → studio device) -------- */
+let pendingDeviceSelect: string | null = null;
+export const requestDeviceSelect = (id: string) => {
+  pendingDeviceSelect = id;
+};
+export const peekDeviceSelect = () => pendingDeviceSelect;
+export const consumeDeviceSelect = () => {
+  const v = pendingDeviceSelect;
+  pendingDeviceSelect = null;
+  return v;
+};
 
 export function defaultParams(d: SkaziDevice): Record<string, number> {
   const o: Record<string, number> = {};
@@ -672,6 +770,7 @@ export interface SkaziState {
   fx: Record<string, { enabled: boolean; params: Record<string, number> }>;
   seq: Record<string, SeqPattern>;
   godSeed: number;
+  favorites: string[];
 }
 
 export interface SeqStep {
@@ -717,6 +816,7 @@ function initialState(): SkaziState {
     fx,
     seq: { tbon303: defaultSeq("tbon303"), skacid: defaultSeq("skacid") },
     godSeed: 1,
+    favorites: ["skazi", "subich"],
   };
 }
 
@@ -738,6 +838,9 @@ function loadState(): SkaziState {
       if (Array.isArray(s) && s.length === 16) base.seq[id] = s;
     }
     if (typeof saved.godSeed === "number") base.godSeed = saved.godSeed;
+    if (Array.isArray(saved.favorites)) {
+      base.favorites = saved.favorites.filter((id) => SKAZI_DEVICES.some((d) => d.id === id));
+    }
   } catch {
     /* corrupted state → fresh */
   }
@@ -866,6 +969,29 @@ class SkaziStore {
 
   setGodSeed(seed: number) {
     this.state.godSeed = seed;
+    this.emit();
+  }
+
+  toggleFavorite(deviceId: string) {
+    const cur = this.state.favorites ?? [];
+    const next = cur.includes(deviceId) ? cur.filter((id) => id !== deviceId) : [...cur, deviceId];
+    this.state.favorites = next;
+    this.emit();
+  }
+
+  /** randomize all continuous params of an instrument patch (🎲 our way) */
+  randomizeInstrument(deviceId: string) {
+    const d = deviceById(deviceId);
+    if (!d || d.kind === "fx") return;
+    const params = { ...(this.state.instruments[deviceId] ?? defaultParams(d)) };
+    for (const p of d.params) {
+      if (p.options) continue; // keep selects stable
+      // bias musical params toward the middle for pleasant results
+      const u = Math.random();
+      const r = p.min + (u * 0.7 + 0.15) * (p.max - p.min);
+      params[p.id] = p.step ? Math.round(r / p.step) * p.step : r;
+    }
+    this.state.instruments[deviceId] = params;
     this.emit();
   }
 

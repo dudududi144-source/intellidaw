@@ -2,18 +2,32 @@
 
 import { FolderOpen, Download, Sparkles } from "lucide-react";
 import { Section, SectionHead, Card, Chip } from "./kit";
-import { SKAZI_DEVICES, SKAZI_FOLDERS, devicesInFolder } from "@/lib/daw/skazi";
+import {
+  SKAZI_DEVICES,
+  SKAZI_FOLDERS,
+  devicesInFolder,
+  isExtraDevice,
+  requestDeviceSelect,
+} from "@/lib/daw/skazi";
 
 const BUNDLE_URL = "https://github.com/slazoasher/skazi-bundle/releases/latest";
 
 export function SkaziBundle({ onOpenStudio }: { onOpenStudio: () => void }) {
+  const bundleCount = SKAZI_DEVICES.filter((d) => !isExtraDevice(d)).length;
+  const extrasCount = SKAZI_DEVICES.length - bundleCount;
+
+  const tryDevice = (id: string) => {
+    requestDeviceSelect(id);
+    onOpenStudio();
+  };
+
   return (
     <Section id="skazi">
       <div className="flex flex-wrap items-end justify-between gap-6">
         <SectionHead
           kicker="SKAZI Bundle · included"
-          title="19 free SKAZI tools, built right in"
-          sub="Every free plugin from Asher Swissa's SKAZI Bundle — synths, acid basslines, kick & riser machines, a MIDI pattern generator and a 10-slot master FX rack — recreated as browser-native devices inside the studio. No install, no account."
+          title={`All ${bundleCount} free SKAZI tools, built right in`}
+          sub={`Every free plugin from Asher Swissa's SKAZI Bundle — synths, acid basslines, kick & riser machines, a MIDI pattern generator and a 10-slot master FX rack — recreated as browser-native devices inside the studio. Plus ${extrasCount} Intellidaw originals in the Extras folder. No install, no account.`}
         />
         <div className="flex flex-col gap-2">
           <button
@@ -35,33 +49,48 @@ export function SkaziBundle({ onOpenStudio }: { onOpenStudio: () => void }) {
         </div>
       </div>
 
-      <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         {SKAZI_FOLDERS.map((folder) => {
           const items = devicesInFolder(folder);
+          const extra = folder === "Intellidaw Extras";
           return (
             <Card key={folder} className="flex flex-col gap-3">
-              <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.18em] text-[#f2a43a]">
+              <div
+                className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.18em]"
+                style={{ color: extra ? "#7fd4c1" : "#f2a43a" }}
+              >
                 <FolderOpen className="h-4 w-4" />
                 {folder}
                 <span className="ml-auto text-[#a89f91]">{items.length}</span>
               </div>
               <ul className="space-y-2">
                 {items.map((d) => (
-                  <li key={d.id} className="flex items-start gap-2">
-                    <span
-                      className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full"
-                      style={{ background: d.accent }}
-                      aria-hidden
-                    />
-                    <div className="min-w-0">
-                      <div className="text-[13px] font-semibold leading-tight text-[#f0ece4]">
-                        {d.name}
-                      </div>
-                      <div className="truncate text-[11px] text-[#a89f91]">{d.tagline}</div>
-                    </div>
+                  <li key={d.id}>
+                    <button
+                      onClick={() => tryDevice(d.id)}
+                      className="group flex w-full items-start gap-2 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-white/[0.04]"
+                      title={`Try ${d.name} in the studio`}
+                    >
+                      <span
+                        className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full transition-transform group-hover:scale-150"
+                        style={{ background: d.accent }}
+                        aria-hidden
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-[13px] font-semibold leading-tight text-[#f0ece4] group-hover:text-[#ffb75c]">
+                          {d.name}
+                        </span>
+                        <span className="block truncate text-[11px] text-[#a89f91]">{d.tagline}</span>
+                      </span>
+                    </button>
                   </li>
                 ))}
               </ul>
+              {extra && (
+                <p className="mt-auto font-mono text-[9px] leading-relaxed text-[#7fd4c1]/60">
+                  Our own originals — made for Intellidaw, not part of the SKAZI bundle.
+                </p>
+              )}
             </Card>
           );
         })}
@@ -78,8 +107,9 @@ export function SkaziBundle({ onOpenStudio }: { onOpenStudio: () => void }) {
 
       <p className="mt-4 max-w-3xl font-mono text-[11px] leading-relaxed text-[#a89f91]/70">
         The SKAZI Bundle tools by Asher Swissa are rebuilt from scratch as Web Audio devices for
-        Intellidaw — same names, same workflow, running entirely in your browser. Prefer the native
-        plugins for your desktop DAW? The official bundle is a free download from the releases page.
+        Intellidaw — same names, same workflow, running entirely in your browser. The Extras folder
+        holds our own original devices. Prefer the native plugins for your desktop DAW? The official
+        bundle is a free download from the releases page.
       </p>
     </Section>
   );

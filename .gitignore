@@ -57,3 +57,4 @@ server.log
 /download/
 /db/
 /agent-ctx
+tool-results/
