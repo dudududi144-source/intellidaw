@@ -68,22 +68,19 @@ export const SECTION_PRESETS: Array<{ name: string; color: string }> = [
   { name: "Outro", color: "#e5c15a" },
 ];
 
-/** Build one section per bar covering the whole song */
-export function autoSections(tracks: Track[], quietFirst: boolean): Section[] {
-  const ids = tracks.map((t) => t.id);
+/** Build one section per bar covering the whole song.
+ *  Default: every section plays every track. Arrangement mutes were a
+ *  surprise that silenced half the loop and made playback feel broken —
+ *  now they are opt-in only, edited from the timeline ruler. */
+export function autoSections(tracks: Track[], quietFirst = false): Section[] {
+  void quietFirst;
   return SECTION_PRESETS.map(({ name, color }, i) => ({
     id: `sec${i}_${uid()}`,
     name,
     color,
     startBar: i,
     endBar: i + 1,
-    // intro thins the drums/bass out, hook plays everything, outro drops the lead
-    mutes:
-      i === 0 && quietFirst
-        ? ids.filter((_, idx) => idx > 1 && idx < ids.length - 2)
-        : i === SECTION_PRESETS.length - 1
-          ? ids.filter((t2) => /lead|acid|bell|stab|303/i.test(tracks.find((t) => t.id === t2)?.name ?? ""))
-          : [],
+    mutes: [],
   }));
 }
 

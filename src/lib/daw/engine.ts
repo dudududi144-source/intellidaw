@@ -20,22 +20,22 @@ const TICK_MS = 25;
 /** per-sound trim so a full kit never slams the master limiter
     (drums are synthesised hot — without this the mix pumps constantly) */
 const DRUM_TRIM: Partial<Record<DrumSound, number>> = {
-  kick: 0.85,
-  kick2: 0.85,
-  snare: 0.78,
-  clap: 0.62,
-  chat: 0.45,
-  ohat: 0.45,
-  perc: 0.4,
-  rim: 0.46,
-  tom: 0.68,
-  conga: 0.54,
-  shaker: 0.38,
-  ride: 0.34,
-  crash: 0.42,
-  chop: 0.48,
-  vox: 0.44,
-  fx: 0.3,
+  kick: 0.78,
+  kick2: 0.78,
+  snare: 0.68,
+  clap: 0.56,
+  chat: 0.4,
+  ohat: 0.4,
+  perc: 0.36,
+  rim: 0.42,
+  tom: 0.6,
+  conga: 0.48,
+  shaker: 0.34,
+  ride: 0.3,
+  crash: 0.36,
+  chop: 0.44,
+  vox: 0.4,
+  fx: 0.28,
 };
 const CUSTOM_TRIM = 0.85;
 
@@ -68,6 +68,57 @@ export interface DrumVoiceOpts {
   customBuf?: AudioBuffer | null;
 }
 
+/** per-voice tanh saturator — gives synthesized drums body instead of a
+    thin “beepy” oscillator sound */
+function satNode(ctx: BaseAudioContext, drive: number): WaveShaperNode {
+  const ws = ctx.createWaveShaper();
+  const n = 512;
+  const c = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    c[i] = Math.tanh(drive * x) / Math.tanh(drive);
+  }
+  ws.curve = c;
+  ws.oversample = "2x";
+  return ws;
+}
+
+/** TR-808 style metallic partial bank — six detuned squares through a
+    bandpass/highpass pair. This is what separates a real hat “tsss” from
+    a harsh noise burst. */
+function metal(
+  ctx: BaseAudioContext,
+  dest: AudioNode,
+  time: number,
+  dur: number,
+  level: number,
+  rate: number
+) {
+  const bp = ctx.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.frequency.value = Math.min(14000, 9800 * Math.max(0.5, rate));
+  bp.Q.value = 0.7;
+  const hp = ctx.createBiquadFilter();
+  hp.type = "highpass";
+  hp.frequency.value = 6200;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(level, time);
+  g.gain.exponentialRampToValueAtTime(0.001, time + dur);
+  bp.connect(hp).connect(g).connect(dest);
+  const base = 263;
+  const ratios = [1, 1.52, 1.6, 1.81, 2.23, 3.21];
+  for (const r of ratios) {
+    const o = ctx.createOscillator();
+    o.type = "square";
+    o.frequency.value = base * r * rate;
+    const og = ctx.createGain();
+    og.gain.value = 0.058;
+    o.connect(og).connect(bp);
+    o.start(time);
+    o.stop(time + dur + 0.06);
+  }
+}
+
 export function scheduleDrum(
   ctx: BaseAudioContext,
   dest: AudioNode,
@@ -93,78 +144,88 @@ export function scheduleDrum(
   switch (sound) {
     case "kick":
     case "kick2": {
+      // punchy 808-style kick: fast pitch drop into a saturated body with
+      // a two-stage decay (hard transient, long musical sub tail)
+      const punchy = sound === "kick";
+      const f0 = punchy ? 150 : 118;
+      const f1 = punchy ? 43 : 35;
+      const dur = punchy ? 0.52 : 0.72;
       const o = ctx.createOscillator();
-      const g = ctx.createGain();
       o.type = "sine";
-      const f0 = sound === "kick" ? 160 : 130;
-      const f1 = sound === "kick" ? 44 : 36;
-      const dur = sound === "kick" ? 0.42 : 0.62;
       o.frequency.setValueAtTime(f0 * rate, time);
-      o.frequency.exponentialRampToValueAtTime(f1 * rate, time + 0.11);
+      o.frequency.exponentialRampToValueAtTime(f1 * rate, time + 0.075);
+      o.frequency.exponentialRampToValueAtTime(f1 * 0.94 * rate, time + dur);
+      const shaper = satNode(ctx, 1.9);
+      const g = ctx.createGain();
       g.gain.setValueAtTime(vel, time);
+      g.gain.exponentialRampToValueAtTime(vel * 0.42, time + 0.055);
+      g.gain.exponentialRampToValueAtTime(vel * 0.2, time + 0.24);
       g.gain.exponentialRampToValueAtTime(0.001, time + dur);
-      o.connect(g).connect(dest);
+      o.connect(shaper).connect(g).connect(dest);
       o.start(time);
-      o.stop(time + dur + 0.05);
-      // click
+      o.stop(time + dur + 0.1);
+      // beater click — softer than before so it never sandpapers the mix
       const cg = ctx.createGain();
-      cg.gain.setValueAtTime(vel * 0.35, time);
-      cg.gain.exponentialRampToValueAtTime(0.001, time + 0.02);
+      cg.gain.setValueAtTime(vel * 0.22, time);
+      cg.gain.exponentialRampToValueAtTime(0.001, time + 0.018);
       const cf = ctx.createBiquadFilter();
       cf.type = "lowpass";
-      cf.frequency.value = 4000;
+      cf.frequency.value = 3400;
       startNoise(ctx, cf, 0.02, time);
       cf.connect(cg).connect(dest);
       break;
     }
     case "snare": {
-      const nf = ctx.createBiquadFilter();
-      nf.type = "bandpass";
-      nf.frequency.value = 1900 * rate;
-      nf.Q.value = 0.9;
+      // body: two tuned triangles through a saturator (fat, not beepy)
+      const sat = satNode(ctx, 1.5);
+      const bg = ctx.createGain();
+      bg.gain.setValueAtTime(vel * 0.55, time);
+      bg.gain.exponentialRampToValueAtTime(0.001, time + 0.19);
+      sat.connect(bg).connect(dest);
+      [186, 255].forEach((f) => {
+        const o = ctx.createOscillator();
+        o.type = "triangle";
+        o.frequency.setValueAtTime(f * rate, time);
+        o.frequency.exponentialRampToValueAtTime(f * 0.86 * rate, time + 0.1);
+        o.connect(sat);
+        o.start(time);
+        o.stop(time + 0.24);
+      });
+      // crack: bright noise riding above the body
+      const hp = ctx.createBiquadFilter();
+      hp.type = "highpass";
+      hp.frequency.value = 1150 * rate;
       const ng = ctx.createGain();
-      ng.gain.setValueAtTime(vel * 0.9, time);
-      ng.gain.exponentialRampToValueAtTime(0.001, time + 0.2);
-      startNoise(ctx, nf, 0.3, time);
-      nf.connect(ng).connect(dest);
-      const o = ctx.createOscillator();
-      o.type = "triangle";
-      o.frequency.setValueAtTime(195 * rate, time);
-      o.frequency.exponentialRampToValueAtTime(120 * rate, time + 0.08);
-      const og = ctx.createGain();
-      og.gain.setValueAtTime(vel * 0.7, time);
-      og.gain.exponentialRampToValueAtTime(0.001, time + 0.12);
-      o.connect(og).connect(dest);
-      o.start(time);
-      o.stop(time + 0.2);
+      ng.gain.setValueAtTime(vel * 0.6, time);
+      ng.gain.exponentialRampToValueAtTime(0.001, time + 0.18);
+      startNoise(ctx, hp, 0.3, time);
+      hp.connect(ng).connect(dest);
       break;
     }
     case "clap": {
+      // classic clap: one noise burst through an envelope with 3 rapid
+      // re-bursts and a longer tail — reads as a room-sized clap
+      const f = ctx.createBiquadFilter();
+      f.type = "bandpass";
+      f.frequency.value = 1080 * rate;
+      f.Q.value = 1.35;
+      const g = ctx.createGain();
+      f.connect(g).connect(dest);
+      g.gain.setValueAtTime(0.0001, time);
       for (let i = 0; i < 3; i++) {
-        const f = ctx.createBiquadFilter();
-        f.type = "bandpass";
-        f.frequency.value = 1150 * rate;
-        f.Q.value = 1.6;
-        const g = ctx.createGain();
         const t0 = time + i * 0.011;
-        g.gain.setValueAtTime(vel * 0.8, t0);
-        g.gain.exponentialRampToValueAtTime(0.001, t0 + (i === 2 ? 0.16 : 0.03));
-        startNoise(ctx, f, 0.15, t0);
-        f.connect(g).connect(dest);
+        g.gain.setValueAtTime(vel * 0.68, t0);
+        g.gain.exponentialRampToValueAtTime(vel * 0.1, t0 + 0.01);
       }
+      g.gain.setValueAtTime(vel * 0.62, time + 0.033);
+      g.gain.exponentialRampToValueAtTime(0.001, time + 0.033 + 0.19);
+      startNoise(ctx, f, 0.25, time);
       break;
     }
     case "chat":
     case "ohat": {
-      const dur = sound === "chat" ? 0.05 : 0.33;
-      const f = ctx.createBiquadFilter();
-      f.type = "highpass";
-      f.frequency.value = 7200 * rate;
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(vel * (sound === "chat" ? 0.55 : 0.5), time);
-      g.gain.exponentialRampToValueAtTime(0.001, time + dur);
-      startNoise(ctx, f, 0.5, time);
-      f.connect(g).connect(dest);
+      const dur = sound === "chat" ? 0.055 : 0.42;
+      metal(ctx, dest, time, dur, vel * (sound === "chat" ? 0.5 : 0.42), rate);
       break;
     }
     case "perc": {
@@ -232,26 +293,17 @@ export function scheduleDrum(
     }
     case "ride":
     case "crash": {
-      const dur = sound === "ride" ? 0.7 : 1.4;
+      // shimmer noise bed + the metallic bank = believable cymbal wash
+      const dur = sound === "ride" ? 0.9 : 1.7;
       const f = ctx.createBiquadFilter();
       f.type = "highpass";
-      f.frequency.value = sound === "ride" ? 6800 : 4500;
+      f.frequency.value = sound === "ride" ? 6800 : 4200;
       const g = ctx.createGain();
-      g.gain.setValueAtTime(vel * (sound === "ride" ? 0.35 : 0.5), time);
+      g.gain.setValueAtTime(vel * (sound === "ride" ? 0.22 : 0.3), time);
       g.gain.exponentialRampToValueAtTime(0.001, time + dur);
       startNoise(ctx, f, 2, time);
       f.connect(g).connect(dest);
-      [3600, 5210, 7830].forEach((fr) => {
-        const o = ctx.createOscillator();
-        o.type = "square";
-        o.frequency.value = fr * rate;
-        const og = ctx.createGain();
-        og.gain.setValueAtTime(vel * 0.06, time);
-        og.gain.exponentialRampToValueAtTime(0.001, time + dur * 0.7);
-        o.connect(og).connect(dest);
-        o.start(time);
-        o.stop(time + dur);
-      });
+      metal(ctx, dest, time, dur * 0.85, vel * (sound === "ride" ? 0.3 : 0.34), rate);
       break;
     }
     case "chop": {
@@ -341,12 +393,13 @@ export function scheduleSynth(
   const f = ctx.createBiquadFilter();
   f.type = "lowpass";
   f.Q.value = p.resonance;
-  const cutHz = cutoffHz(p.cutoff);
-  const peakCut = Math.min(16000, cutHz * 3.2);
+  // velocity shapes brightness (how hard you hit = how open the filter)
+  const cutHz = cutoffHz(p.cutoff) * (0.6 + 0.4 * Math.min(1, vel / 0.95));
+  const peakCut = Math.min(16000, cutHz * (1.7 + Math.min(10, p.resonance) * 0.05));
   f.frequency.setValueAtTime(Math.max(80, peakCut), time);
   f.frequency.exponentialRampToValueAtTime(Math.max(90, cutHz), time + Math.max(0.03, p.decay));
   g.gain.setValueAtTime(0.0001, time);
-  const peak = vel * 0.32;
+  const peak = vel * 0.24;
   const atk = Math.max(0.004, p.attack);
   g.gain.linearRampToValueAtTime(peak, time + atk);
   g.gain.setTargetAtTime(peak * p.sustain, time + atk, Math.max(0.02, p.decay / 3));
@@ -355,26 +408,49 @@ export function scheduleSynth(
   // fully decayed (<0.05%) before the oscillators stop — no end-click
   const relTc = Math.max(0.015, p.release / 4);
   g.gain.setTargetAtTime(0.0001, end, relTc);
-  const stopAt = end + p.release * 2 + 0.15;
+  const stopAt = end + p.release * 2 + 0.18;
   f.connect(g).connect(dest);
 
-  const mkOsc = (detuneCents: number, type: OscillatorType) => {
+  const mkOsc = (
+    detuneCents: number,
+    type: OscillatorType,
+    level: number,
+    pan: number,
+    freqMult = 1
+  ) => {
     const o = ctx.createOscillator();
     o.type = type;
+    const target = freq * freqMult;
     if (p.glide) {
-      o.frequency.setValueAtTime(freq * Math.pow(2, -2 / 12), time);
-      o.frequency.exponentialRampToValueAtTime(freq, time + 0.06);
+      o.frequency.setValueAtTime(target * Math.pow(2, -2 / 12), time);
+      o.frequency.exponentialRampToValueAtTime(Math.max(20, target), time + 0.06);
     } else {
-      o.frequency.setValueAtTime(freq, time);
+      o.frequency.setValueAtTime(Math.max(20, target), time);
     }
     o.detune.value = detuneCents;
-    o.connect(f);
+    const og = ctx.createGain();
+    og.gain.value = level;
+    o.connect(og);
+    let tail: AudioNode = og;
+    if (pan !== 0) {
+      const pn = ctx.createStereoPanner();
+      pn.pan.value = pan;
+      og.connect(pn);
+      tail = pn;
+    }
+    tail.connect(f);
     o.start(time);
     o.stop(stopAt);
   };
-  mkOsc(0, p.waveform);
-  if (p.detune > 0) mkOsc(p.detune, p.waveform);
-  if (p.waveform !== "sine" && p.detune > 0) mkOsc(-p.detune, p.waveform); // unison widen
+
+  // center osc + a detuned L/R pair = width without phasey chorus
+  mkOsc(0, p.waveform, 0.55, 0);
+  if (p.detune > 0) {
+    mkOsc(p.detune, p.waveform, 0.32, -0.55);
+    mkOsc(-p.detune, p.waveform, 0.32, 0.55);
+  }
+  // sub octave adds weight in the bass register without muddying leads
+  if (freq < 330) mkOsc(0, "sine", 0.5, 0, 0.5);
 }
 
 /* ---------------- graph ---------------- */
@@ -395,6 +471,7 @@ interface Graph {
   master: GainNode;
   drive: WaveShaperNode;
   filter: BiquadFilterNode;
+  /** bus glue compressor (feeds the ceiling) */
   limiter: DynamicsCompressorNode;
   /** last node of the master chain (what touches the destination) */
   tail: AudioNode;
@@ -421,11 +498,31 @@ function driveCurve(amount: number): Float32Array {
 }
 const driveCurves = new Map<number, Float32Array>();
 
+/** linear below ±0.8, smooth sine knee to ±1 — a ceiling that never adds
+    gain and never distorts at normal levels (cached once) */
+let _ceiling: Float32Array | null = null;
+function ceilingCurve(): Float32Array {
+  if (_ceiling) return _ceiling;
+  const n = 1024;
+  const c = new Float32Array(n);
+  const knee = 0.8;
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    const a = Math.abs(x);
+    c[i] =
+      a <= knee
+        ? x
+        : Math.sign(x) * (knee + (1 - knee) * Math.sin(((a - knee) / (1 - knee)) * (Math.PI / 2)));
+  }
+  _ceiling = c;
+  return c;
+}
+
 function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Graph {
   const master = ctx.createGain();
   master.gain.value = volGain(project.masterVolume);
 
-  // live FX: gentle drive then a master filter, then the safety limiter
+  // live FX: gentle drive then a master filter
   const drive = ctx.createWaveShaper();
   drive.curve = driveCurve(0);
   drive.oversample = "2x";
@@ -436,25 +533,28 @@ function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Gra
   master.connect(drive);
   drive.connect(filter);
 
-  const limiter = ctx.createDynamicsCompressor();
-  limiter.threshold.value = -4;
-  limiter.knee.value = 4;
-  limiter.ratio.value = 12;
-  limiter.attack.value = 0.003;
-  limiter.release.value = 0.16;
-  // fixed headroom trim: the summed mix runs hot, and without this the
-  // limiter slams 24/7 (pumping, squashed sound). +1 dB of makeup after
-  // the drum/synth trims lands the master around -14 LUFS integrated
-  // (streaming standard) with the limiter only catching peaks.
-  const headroom = ctx.createGain();
-  headroom.gain.value = 1.12;
-  filter.connect(headroom);
-  headroom.connect(limiter);
+  // bus glue: 2–3 dB of slow leveling that never pumps. The old chain
+  // (−4dB / 12:1 limiter + fixed make-up gain) compressed 24/7, which is
+  // exactly the squashed "cheap" sound. Two light stages beat one hard one.
+  const glue = ctx.createDynamicsCompressor();
+  glue.threshold.value = -14;
+  glue.knee.value = 14;
+  glue.ratio.value = 2.2;
+  glue.attack.value = 0.008;
+  glue.release.value = 0.22;
+  filter.connect(glue);
 
-  let tail: AudioNode = limiter;
+  // final transparent ceiling: linear below ±0.8, smooth sine knee to ±1
+  // — catches the odd drum transient without audible distortion
+  const ceiling = ctx.createWaveShaper();
+  ceiling.curve = ceilingCurve();
+  ceiling.oversample = "2x";
+  glue.connect(ceiling);
+
+  let tail: AudioNode = ceiling;
   const chain: SkaziChain | null = getSkaziChainOrNull(ctx);
   if (chain) {
-    limiter.connect(chain.input);
+    ceiling.connect(chain.input);
     chain.apply(currentSkaziStateSnapshot(), project.bpm);
     tail = chain.output;
   }
@@ -534,7 +634,7 @@ function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Gra
 
     channels.set(t.id, { input, eqLow, eqMid, eqHigh, pan, gain, delaySend, reverbSend });
   }
-  return { master, drive, filter, limiter, tail, channels, delayIn, reverbIn, delayNode: delay };
+  return { master, drive, filter, limiter: glue, tail, channels, delayIn, reverbIn, delayNode: delay };
 }
 
 const graphExtras: { masterAnalyser?: AnalyserNode } = {};
@@ -761,14 +861,14 @@ export class DawEngine {
     if (!this.ctx) return;
     const o = this.ctx.createOscillator();
     o.type = "sine";
-    o.frequency.value = accent ? 1568 : 1046;
+    o.frequency.value = accent ? 1318 : 880;
     const g = this.ctx.createGain();
     g.gain.setValueAtTime(0.0001, time);
-    g.gain.linearRampToValueAtTime(accent ? 0.5 : 0.3, time + 0.002);
-    g.gain.exponentialRampToValueAtTime(0.0001, time + 0.05);
+    g.gain.linearRampToValueAtTime(accent ? 0.32 : 0.18, time + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, time + 0.045);
     o.connect(g).connect(this.ctx.destination);
     o.start(time);
-    o.stop(time + 0.08);
+    o.stop(time + 0.07);
   }
 
   /** jump the transport to an absolute step (quantised scenes / loop seek) */
@@ -881,7 +981,7 @@ export class DawEngine {
     });
   }
 
-  async previewSynth(p: SynthParams, pitch: number, durSec = 0.35, vel = 0.9) {
+  async previewSynth(p: SynthParams, pitch: number, durSec = 0.55, vel = 0.9) {
     const ctx = await this.ensure();
     const dest = await this.previewDest();
     scheduleSynth(ctx, dest, p, pitch, vel, ctx.currentTime + 0.01, durSec);

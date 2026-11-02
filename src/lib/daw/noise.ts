@@ -36,21 +36,33 @@ export function cachedNoise(ctx: BaseAudioContext, seconds: number): AudioBuffer
 
 const impulseCaches = new WeakMap<BaseAudioContext, AudioBuffer>();
 
-/** a reusable 2.4s stereo reverb impulse (one per context) */
+/** a reusable 2.4s stereo reverb impulse (one per context)
+ *  shaped like a small room: short predelay, lowpassed tail (a raw
+ *  white-noise decay rings metallic), smooth exponential-ish fade */
 export function cachedImpulse(
   ctx: BaseAudioContext,
   seconds = 2.4,
-  decay = 2.6
+  decay = 2.8
 ): AudioBuffer {
   const hit = impulseCaches.get(ctx);
   if (hit) return hit;
-  const len = Math.floor(ctx.sampleRate * seconds);
-  const buf = ctx.createBuffer(2, len, ctx.sampleRate);
+  const sr = ctx.sampleRate;
+  const len = Math.floor(sr * seconds);
+  const buf = ctx.createBuffer(2, len, sr);
+  const pre = Math.floor(sr * 0.018); // ~18ms predelay keeps the dry hit up front
   for (let c = 0; c < 2; c++) {
     const d = buf.getChannelData(c);
+    let lp = 0;
+    const tilt = 0.34 + c * 0.03; // per-channel tilt decorrelates L/R
     for (let i = 0; i < len; i++) {
-      const t = i / len;
-      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, decay);
+      if (i < pre) {
+        d[i] = 0;
+        continue;
+      }
+      const t = (i - pre) / (len - pre);
+      const n = Math.random() * 2 - 1;
+      lp = lp * (1 - tilt) + n * tilt; // 1-pole lowpass on the tail
+      d[i] = lp * Math.pow(1 - t, decay) * 1.6;
     }
   }
   impulseCaches.set(ctx, buf);
