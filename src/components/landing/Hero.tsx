@@ -123,7 +123,7 @@ function SlideMixer() {
         <div className="flex h-24 w-full items-end overflow-hidden rounded-md bg-black/50 ring-1 ring-[#f2a43a]/40 sm:h-28">
           <span className="w-full rounded-md bg-gradient-to-t from-[#c97f1e] to-[#ffe9c2]" style={{ height: "78%" }} />
         </div>
-        <span className="font-mono text-[9px] text-[#f2a43a]">−9.2 LUFS</span>
+        <span className="font-mono text-[9px] text-[#f2a43a]">−14.4 LUFS</span>
         <span className="text-[10px] font-semibold text-[#f0ece4]">Out</span>
       </div>
     </div>

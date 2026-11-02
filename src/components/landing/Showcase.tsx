@@ -132,7 +132,7 @@ function MixerMock() {
           <div className="mx-auto mt-3 h-20 w-3.5 overflow-hidden rounded-full bg-black/60 sm:h-24">
             <div className="mt-[18%] w-full rounded-full bg-gradient-to-t from-[#c97f1e] to-[#ffe9c2]" style={{ height: "82%" }} />
           </div>
-          <div className="mt-1 text-center font-mono text-[8px] text-[#f2a43a]">−9.2 LUFS</div>
+          <div className="mt-1 text-center font-mono text-[8px] text-[#f2a43a]">−14.4 LUFS</div>
         </div>
       </div>
       <div className="mt-4 flex items-center gap-1.5 overflow-hidden rounded-lg border border-white/[0.05] bg-black/25 px-3 py-2 font-mono text-[9px] uppercase tracking-wider text-[#a89f91]">

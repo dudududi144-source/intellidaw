@@ -160,6 +160,51 @@ function SessionTabInner({
       <div className="text-center font-mono text-[10px] tracking-wide text-[#a89f91]/70">
         MASTER {masterVol}% · FX APPLY ON TOP OF THE MIXDOWN · PRESS PLAY THEN JAM
       </div>
+
+      {/* live jam cheat-sheet */}
+      <div className="grid gap-2.5 sm:grid-cols-3">
+        <div className="rounded-xl border border-white/8 bg-[#14100d] p-3">
+          <div className="mb-2 font-mono text-[9px] uppercase tracking-[0.2em] text-[#f2a43a]">
+            Transport
+          </div>
+          <ul className="space-y-1.5 font-mono text-[10px] text-[#a89f91]">
+            <li className="flex justify-between"><span>play / stop</span><kbd className="rounded bg-white/8 px-1.5 py-0.5 text-[#f0ece4]">Space</kbd></li>
+            <li className="flex justify-between"><span>back to start</span><kbd className="rounded bg-white/8 px-1.5 py-0.5 text-[#f0ece4]">⏮ btn</kbd></li>
+            <li className="flex justify-between"><span>metronome</span><kbd className="rounded bg-white/8 px-1.5 py-0.5 text-[#f0ece4]">M</kbd></li>
+            <li className="flex justify-between"><span>undo / redo</span><span className="text-[#f0ece4]">Ctrl+Z / Shift</span></li>
+          </ul>
+        </div>
+        <div className="rounded-xl border border-white/8 bg-[#14100d] p-3">
+          <div className="mb-2 font-mono text-[9px] uppercase tracking-[0.2em] text-[#f2a43a]">
+            Jam keys
+          </div>
+          <ul className="space-y-1.5 font-mono text-[10px] text-[#a89f91]">
+            <li className="flex justify-between"><span>drum pads</span><span className="text-[#f0ece4]">1–0 · Q W E R T Y</span></li>
+            <li className="flex justify-between"><span>piano keys</span><span className="text-[#f0ece4]">A S D F G H J K L</span></li>
+            <li className="flex justify-between"><span>pad velocity</span><span className="text-[#f0ece4]">Shift+click</span></li>
+            <li className="flex justify-between"><span>devices</span><span className="text-[#f0ece4]">SKAZI tab</span></li>
+          </ul>
+        </div>
+        <div className="rounded-xl border border-white/8 bg-[#14100d] p-3">
+          <div className="mb-2 font-mono text-[9px] uppercase tracking-[0.2em] text-[#f2a43a]">
+            Arrangement
+          </div>
+          <div className="space-y-1">
+            {project.sections.map((s, i) => (
+              <div key={s.id} className="flex items-center gap-2">
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: s.color }} />
+                <span className="font-mono text-[10px] text-[#f0ece4]">{s.name}</span>
+                <span className="ml-auto font-mono text-[9px] text-[#a89f91]">
+                  bar {i + 1} · {project.tracks.length - s.mutes.length}/{project.tracks.length} in
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 border-t border-white/5 pt-2 font-mono text-[9px] uppercase tracking-wider text-[#a89f91]">
+            {project.bpm} BPM · {project.songKey} · swing {Math.round(project.swing * 100)}%
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

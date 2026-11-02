@@ -222,7 +222,7 @@ function MixerTabInner({
                 <div className="font-mono text-[9px] uppercase tracking-wider text-[#a89f91]">
                   Limiter · glue
                 </div>
-                <div className="font-mono text-[10px] text-[#f2a43a]">ON · −6 dB</div>
+                <div className="font-mono text-[10px] text-[#f2a43a]">ON · −4 dB</div>
               </div>
               <div className="mt-1 rounded-md bg-black/40 px-2 py-1.5 text-center">
                 <div className="font-mono text-[9px] uppercase tracking-wider text-[#a89f91]">

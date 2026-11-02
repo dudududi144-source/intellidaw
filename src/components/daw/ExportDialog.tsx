@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import type { Project } from "@/lib/daw/types";
-import { getEngine } from "@/lib/daw/engine";
+import { encodeWav, getEngine } from "@/lib/daw/engine";
 import { projectToMidi } from "@/lib/daw/midi";
 import { downloadBlob, downloadJson, sanitizeProject } from "@/lib/daw/storage";
 
@@ -39,10 +39,10 @@ export function ExportDialog({
     setDone(null);
     setLufs(null);
     try {
-      const blob = await getEngine().renderWav(project, bars);
-      downloadBlob(blob, `${safeName}-${bars}bar.wav`);
-      // measure loudness of the exact render (BS.1770 approximation)
+      // render once — encode the WAV and measure loudness from the same buffer
       const buf = await getEngine().renderBuffer(project, bars);
+      downloadBlob(encodeWav(buf), `${safeName}-${bars}bar.wav`);
+      // measure loudness of the exact render (BS.1770 approximation)
       const l = await getEngine().measureLufs(buf);
       setLufs(l);
       setDone("WAV mixdown saved to your downloads");

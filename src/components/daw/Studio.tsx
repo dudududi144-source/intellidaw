@@ -193,8 +193,9 @@ export function Studio({ onClose }: { onClose: () => void }) {
     } catch (err) {
       console.error("playback failed", err);
       toast({
-        title: "Audio blocked",
-        description: "Your browser needs one more tap — press Play again.",
+        title: err instanceof Error && err.message === "audio-suspended" ? "Audio blocked" : "Playback failed",
+        description:
+          "Your browser needs one more tap — press Play again. If it keeps failing, check your output device.",
       });
     }
   }, [playing, project, toast]);

@@ -58,3 +58,7 @@ server.log
 /db/
 /agent-ctx
 tool-results/
+
+# local verification screenshots
+/shots
+/tool-results

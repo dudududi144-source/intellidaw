@@ -7,6 +7,7 @@
 
 import type { SkaziDevice, SeqPattern } from "./skazi";
 import { deviceById, skaziStore, type SkaziState } from "./skazi";
+import { cachedNoise } from "./noise";
 
 const midiHz = (p: number) => 440 * Math.pow(2, (p - 69) / 12);
 export const skaziCutoffHz = (c: number) => 40 * Math.pow(300, Math.min(1, Math.max(0, c))); // 40Hz..12kHz
@@ -410,14 +411,11 @@ function voiceLimonana(ctx: BaseAudioContext, dest: AudioNode, p: VoiceParams, p
     o.stop(end);
   }
 
-  // airy "shimmer" — soft noise band above the note
+  // airy "shimmer" — soft noise band above the note (looped shared buffer)
   if (p.shimmer > 0.01) {
-    const len = Math.ceil(ctx.sampleRate * (dur + p.release + 1));
-    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
     const nz = ctx.createBufferSource();
-    nz.buffer = buf;
+    nz.buffer = cachedNoise(ctx, 2);
+    nz.loop = true;
     const bp = ctx.createBiquadFilter();
     bp.type = "bandpass";
     bp.frequency.value = clamp(freq * 4, 800, 12000);
@@ -495,12 +493,8 @@ function voiceMalabi(ctx: BaseAudioContext, dest: AudioNode, p: VoiceParams, vel
   body.stop(time + dec + 0.6);
 
   if (p.click > 0.01) {
-    const len = Math.max(64, Math.floor(ctx.sampleRate * 0.02));
-    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
     const nz = ctx.createBufferSource();
-    nz.buffer = buf;
+    nz.buffer = cachedNoise(ctx, 0.02);
     const hp = ctx.createBiquadFilter();
     hp.type = "highpass";
     hp.frequency.value = 1500;
@@ -576,10 +570,7 @@ export function acidNote(
   }
   if ((opts.click ?? p.click ?? 0) > 0.01) {
     const n = ctx.createBufferSource();
-    const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.012), ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
-    n.buffer = buf;
+    n.buffer = cachedNoise(ctx, 0.012);
     const nf = ctx.createBiquadFilter();
     nf.type = "bandpass";
     nf.frequency.value = 2400;
@@ -630,10 +621,7 @@ export function kickassVoice(ctx: BaseAudioContext, dest: AudioNode, p: VoicePar
 
   if (p.click > 0.01) {
     const n = ctx.createBufferSource();
-    const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.02), ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 2);
-    n.buffer = buf;
+    n.buffer = cachedNoise(ctx, 0.02);
     const nf = ctx.createBiquadFilter();
     nf.type = "highpass";
     nf.frequency.value = 1500;
@@ -684,12 +672,8 @@ export function bambaRiser(ctx: BaseAudioContext, dest: AudioNode, p: VoiceParam
   }
   if (wantNoise) {
     const n = ctx.createBufferSource();
-    const buf = ctx.createBuffer(2, Math.floor(ctx.sampleRate * (dur + 0.3)), ctx.sampleRate);
-    for (let c = 0; c < 2; c++) {
-      const d = buf.getChannelData(c);
-      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-    }
-    n.buffer = buf;
+    n.buffer = cachedNoise(ctx, 2);
+    n.loop = true;
     const bp = ctx.createBiquadFilter();
     bp.type = "bandpass";
     bp.Q.value = 1.6;
@@ -725,10 +709,7 @@ export function bambaRiser(ctx: BaseAudioContext, dest: AudioNode, p: VoiceParam
     let guard = 0;
     while (t < time + dur - stepDur && guard++ < 400) {
       const n = ctx.createBufferSource();
-      const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.12), ctx.sampleRate);
-      const d = buf.getChannelData(0);
-      for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 1.6);
-      n.buffer = buf;
+      n.buffer = cachedNoise(ctx, 0.12);
       const nf = ctx.createBiquadFilter();
       nf.type = "bandpass";
       nf.frequency.value = 1900;

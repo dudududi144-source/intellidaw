@@ -559,7 +559,7 @@ export const TEMPLATES: Template[] = [
           { waveform: "sawtooth", cutoff: 0.34, resonance: 8, sustain: 0.2, decay: 0.16, release: 0.08, octave: -1, volume: 0.95 },
           [
             note(2, 1, 45), note(6, 1, 45), note(10, 1, 45), note(14, 1, 43),
-            note(18, 1, 45), note(22, 1, 45), note(26, 1, 45), note(30, 1, 40),
+            note(3, 1, 45), note(7, 1, 45), note(11, 1, 45), note(15, 1, 40),
           ]
         ),
         makeSynthTrack(

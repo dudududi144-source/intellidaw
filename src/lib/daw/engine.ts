@@ -9,31 +9,49 @@ import { SONG_BARS, sectionAtBar } from "./types";
 import { getSkaziChainFor, refreshSkaziChain, type SkaziChain } from "./skaziAudio";
 import { scheduleSkaziVoice, acidNote, bambaRiser, type VoiceParams } from "./skaziAudio";
 import { skaziStore } from "./skazi";
+import { cachedImpulse, cachedNoise, jitterRate } from "./noise";
 
-const LOOKAHEAD_S = 0.14;
-const TICK_MS = 30;
+/* lookahead > tick interval so a busy main thread never starves the
+   scheduler; the timer itself runs in a Worker so background-tab
+   throttling can't silence playback */
+const LOOKAHEAD_S = 0.22;
+const TICK_MS = 25;
 
-/* ---------------- noise + impulse caches ---------------- */
+/** per-sound trim so a full kit never slams the master limiter
+    (drums are synthesised hot — without this the mix pumps constantly) */
+const DRUM_TRIM: Partial<Record<DrumSound, number>> = {
+  kick: 0.85,
+  kick2: 0.85,
+  snare: 0.78,
+  clap: 0.62,
+  chat: 0.45,
+  ohat: 0.45,
+  perc: 0.4,
+  rim: 0.46,
+  tom: 0.68,
+  conga: 0.54,
+  shaker: 0.38,
+  ride: 0.34,
+  crash: 0.42,
+  chop: 0.48,
+  vox: 0.44,
+  fx: 0.3,
+};
+const CUSTOM_TRIM = 0.85;
 
-function noiseBuffer(ctx: BaseAudioContext, seconds = 1): AudioBuffer {
-  const len = Math.floor(ctx.sampleRate * seconds);
-  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
-  const d = buf.getChannelData(0);
-  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
-  return buf;
-}
-
-function reverbImpulse(ctx: BaseAudioContext, seconds = 2.4, decay = 2.6): AudioBuffer {
-  const len = Math.floor(ctx.sampleRate * seconds);
-  const buf = ctx.createBuffer(2, len, ctx.sampleRate);
-  for (let c = 0; c < 2; c++) {
-    const d = buf.getChannelData(c);
-    for (let i = 0; i < len; i++) {
-      const t = i / len;
-      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, decay);
-    }
-  }
-  return buf;
+/** start a reusable noise buffer with slight per-hit variation */
+function startNoise(
+  ctx: BaseAudioContext,
+  dest: AudioNode,
+  seconds: number,
+  time: number
+): AudioBufferSourceNode {
+  const n = ctx.createBufferSource();
+  n.buffer = cachedNoise(ctx, seconds);
+  jitterRate(n);
+  n.connect(dest);
+  n.start(time);
+  return n;
 }
 
 const midiHz = (p: number) => 440 * Math.pow(2, (p - 69) / 12);
@@ -57,13 +75,15 @@ export function scheduleDrum(
   time: number,
   opts: DrumVoiceOpts
 ) {
-  const { vel, tune, customBuf } = opts;
+  const { tune, customBuf } = opts;
+  const trim = DRUM_TRIM[sound] ?? 0.8;
+  const vel = opts.vel * trim;
   if (customBuf) {
     const src = ctx.createBufferSource();
     src.buffer = customBuf;
     src.playbackRate.value = Math.pow(2, tune / 12);
     const g = ctx.createGain();
-    g.gain.setValueAtTime(vel, time);
+    g.gain.setValueAtTime(vel * CUSTOM_TRIM, time);
     g.gain.exponentialRampToValueAtTime(0.001, time + customBuf.duration);
     src.connect(g).connect(dest);
     src.start(time);
@@ -87,21 +107,17 @@ export function scheduleDrum(
       o.start(time);
       o.stop(time + dur + 0.05);
       // click
-      const c = ctx.createBufferSource();
-      c.buffer = noiseBuffer(ctx, 0.02);
       const cg = ctx.createGain();
       cg.gain.setValueAtTime(vel * 0.35, time);
       cg.gain.exponentialRampToValueAtTime(0.001, time + 0.02);
       const cf = ctx.createBiquadFilter();
       cf.type = "lowpass";
       cf.frequency.value = 4000;
-      c.connect(cf).connect(cg).connect(dest);
-      c.start(time);
+      startNoise(ctx, cf, 0.02, time);
+      cf.connect(cg).connect(dest);
       break;
     }
     case "snare": {
-      const n = ctx.createBufferSource();
-      n.buffer = noiseBuffer(ctx, 0.3);
       const nf = ctx.createBiquadFilter();
       nf.type = "bandpass";
       nf.frequency.value = 1900 * rate;
@@ -109,8 +125,8 @@ export function scheduleDrum(
       const ng = ctx.createGain();
       ng.gain.setValueAtTime(vel * 0.9, time);
       ng.gain.exponentialRampToValueAtTime(0.001, time + 0.2);
-      n.connect(nf).connect(ng).connect(dest);
-      n.start(time);
+      startNoise(ctx, nf, 0.3, time);
+      nf.connect(ng).connect(dest);
       const o = ctx.createOscillator();
       o.type = "triangle";
       o.frequency.setValueAtTime(195 * rate, time);
@@ -125,8 +141,6 @@ export function scheduleDrum(
     }
     case "clap": {
       for (let i = 0; i < 3; i++) {
-        const n = ctx.createBufferSource();
-        n.buffer = noiseBuffer(ctx, 0.15);
         const f = ctx.createBiquadFilter();
         f.type = "bandpass";
         f.frequency.value = 1150 * rate;
@@ -135,24 +149,22 @@ export function scheduleDrum(
         const t0 = time + i * 0.011;
         g.gain.setValueAtTime(vel * 0.8, t0);
         g.gain.exponentialRampToValueAtTime(0.001, t0 + (i === 2 ? 0.16 : 0.03));
-        n.connect(f).connect(g).connect(dest);
-        n.start(t0);
+        startNoise(ctx, f, 0.15, t0);
+        f.connect(g).connect(dest);
       }
       break;
     }
     case "chat":
     case "ohat": {
       const dur = sound === "chat" ? 0.05 : 0.33;
-      const n = ctx.createBufferSource();
-      n.buffer = noiseBuffer(ctx, 0.5);
       const f = ctx.createBiquadFilter();
       f.type = "highpass";
       f.frequency.value = 7200 * rate;
       const g = ctx.createGain();
       g.gain.setValueAtTime(vel * (sound === "chat" ? 0.55 : 0.5), time);
       g.gain.exponentialRampToValueAtTime(0.001, time + dur);
-      n.connect(f).connect(g).connect(dest);
-      n.start(time);
+      startNoise(ctx, f, 0.5, time);
+      f.connect(g).connect(dest);
       break;
     }
     case "perc": {
@@ -178,8 +190,6 @@ export function scheduleDrum(
       const g = ctx.createGain();
       g.gain.setValueAtTime(vel * 0.5, time);
       g.gain.exponentialRampToValueAtTime(0.001, time + 0.045);
-      const n = ctx.createBufferSource();
-      n.buffer = noiseBuffer(ctx, 0.05);
       const nf = ctx.createBiquadFilter();
       nf.type = "bandpass";
       nf.frequency.value = 3600 * rate;
@@ -187,10 +197,10 @@ export function scheduleDrum(
       ng.gain.setValueAtTime(vel * 0.4, time);
       ng.gain.exponentialRampToValueAtTime(0.001, time + 0.04);
       o.connect(g).connect(dest);
-      n.connect(nf).connect(ng).connect(dest);
+      startNoise(ctx, nf, 0.05, time);
+      nf.connect(ng).connect(dest);
       o.start(time);
       o.stop(time + 0.1);
-      n.start(time);
       break;
     }
     case "tom":
@@ -209,8 +219,6 @@ export function scheduleDrum(
       break;
     }
     case "shaker": {
-      const n = ctx.createBufferSource();
-      n.buffer = noiseBuffer(ctx, 0.2);
       const f = ctx.createBiquadFilter();
       f.type = "highpass";
       f.frequency.value = 9000 * rate;
@@ -218,23 +226,21 @@ export function scheduleDrum(
       g.gain.setValueAtTime(0.001, time);
       g.gain.linearRampToValueAtTime(vel * 0.4, time + 0.02);
       g.gain.exponentialRampToValueAtTime(0.001, time + 0.1);
-      n.connect(f).connect(g).connect(dest);
-      n.start(time);
+      startNoise(ctx, f, 0.2, time);
+      f.connect(g).connect(dest);
       break;
     }
     case "ride":
     case "crash": {
       const dur = sound === "ride" ? 0.7 : 1.4;
-      const n = ctx.createBufferSource();
-      n.buffer = noiseBuffer(ctx, 2);
       const f = ctx.createBiquadFilter();
       f.type = "highpass";
       f.frequency.value = sound === "ride" ? 6800 : 4500;
       const g = ctx.createGain();
       g.gain.setValueAtTime(vel * (sound === "ride" ? 0.35 : 0.5), time);
       g.gain.exponentialRampToValueAtTime(0.001, time + dur);
-      n.connect(f).connect(g).connect(dest);
-      n.start(time);
+      startNoise(ctx, f, 2, time);
+      f.connect(g).connect(dest);
       [3600, 5210, 7830].forEach((fr) => {
         const o = ctx.createOscillator();
         o.type = "square";
@@ -291,8 +297,6 @@ export function scheduleDrum(
     }
     case "fx": {
       // riser sweep
-      const n = ctx.createBufferSource();
-      n.buffer = noiseBuffer(ctx, 1.2);
       const f = ctx.createBiquadFilter();
       f.type = "bandpass";
       f.Q.value = 2.2;
@@ -301,8 +305,8 @@ export function scheduleDrum(
       const g = ctx.createGain();
       g.gain.setValueAtTime(vel * 0.28, time);
       g.gain.exponentialRampToValueAtTime(0.001, time + 1.05);
-      n.connect(f).connect(g).connect(dest);
-      n.start(time);
+      startNoise(ctx, f, 1.2, time);
+      f.connect(g).connect(dest);
       break;
     }
   }
@@ -347,7 +351,11 @@ export function scheduleSynth(
   g.gain.linearRampToValueAtTime(peak, time + atk);
   g.gain.setTargetAtTime(peak * p.sustain, time + atk, Math.max(0.02, p.decay / 3));
   const end = time + Math.max(atk + 0.05, durSec);
-  g.gain.setTargetAtTime(0.0001, end, Math.max(0.02, p.release / 3));
+  // release: fast time-constant + generous stop margin so the gain is
+  // fully decayed (<0.05%) before the oscillators stop — no end-click
+  const relTc = Math.max(0.015, p.release / 4);
+  g.gain.setTargetAtTime(0.0001, end, relTc);
+  const stopAt = end + p.release * 2 + 0.15;
   f.connect(g).connect(dest);
 
   const mkOsc = (detuneCents: number, type: OscillatorType) => {
@@ -362,8 +370,7 @@ export function scheduleSynth(
     o.detune.value = detuneCents;
     o.connect(f);
     o.start(time);
-    const stop = end + p.release + 0.3;
-    o.stop(stop);
+    o.stop(stopAt);
   };
   mkOsc(0, p.waveform);
   if (p.detune > 0) mkOsc(p.detune, p.waveform);
@@ -389,6 +396,8 @@ interface Graph {
   drive: WaveShaperNode;
   filter: BiquadFilterNode;
   limiter: DynamicsCompressorNode;
+  /** last node of the master chain (what touches the destination) */
+  tail: AudioNode;
   channels: Map<string, Channel>;
   delayIn: GainNode;
   reverbIn: GainNode;
@@ -396,6 +405,10 @@ interface Graph {
 }
 
 function driveCurve(amount: number): Float32Array {
+  // cached: the curve is rebuilt on every live-drive slider move
+  const key = Math.round(amount * 200);
+  const hit = driveCurves.get(key);
+  if (hit) return hit;
   const n = 1024;
   const curve = new Float32Array(n);
   const k = Math.max(0.0001, amount) * 6;
@@ -403,8 +416,10 @@ function driveCurve(amount: number): Float32Array {
     const x = (i / (n - 1)) * 2 - 1;
     curve[i] = Math.tanh(k * x) / Math.tanh(k);
   }
+  driveCurves.set(key, curve);
   return curve;
 }
+const driveCurves = new Map<number, Float32Array>();
 
 function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Graph {
   const master = ctx.createGain();
@@ -422,12 +437,19 @@ function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Gra
   drive.connect(filter);
 
   const limiter = ctx.createDynamicsCompressor();
-  limiter.threshold.value = -6;
-  limiter.knee.value = 0;
-  limiter.ratio.value = 16;
-  limiter.attack.value = 0.002;
-  limiter.release.value = 0.12;
-  filter.connect(limiter);
+  limiter.threshold.value = -4;
+  limiter.knee.value = 4;
+  limiter.ratio.value = 12;
+  limiter.attack.value = 0.003;
+  limiter.release.value = 0.16;
+  // fixed headroom trim: the summed mix runs hot, and without this the
+  // limiter slams 24/7 (pumping, squashed sound). +1 dB of makeup after
+  // the drum/synth trims lands the master around -14 LUFS integrated
+  // (streaming standard) with the limiter only catching peaks.
+  const headroom = ctx.createGain();
+  headroom.gain.value = 1.12;
+  filter.connect(headroom);
+  headroom.connect(limiter);
 
   let tail: AudioNode = limiter;
   const chain: SkaziChain | null = getSkaziChainOrNull(ctx);
@@ -463,7 +485,7 @@ function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Gra
 
   const reverbIn = ctx.createGain();
   const conv = ctx.createConvolver();
-  conv.buffer = reverbImpulse(ctx);
+  conv.buffer = cachedImpulse(ctx);
   const revTone = ctx.createBiquadFilter();
   revTone.type = "highpass";
   revTone.frequency.value = 300;
@@ -512,7 +534,7 @@ function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Gra
 
     channels.set(t.id, { input, eqLow, eqMid, eqHigh, pan, gain, delaySend, reverbSend });
   }
-  return { master, drive, filter, limiter, channels, delayIn, reverbIn, delayNode: delay };
+  return { master, drive, filter, limiter, tail, channels, delayIn, reverbIn, delayNode: delay };
 }
 
 const graphExtras: { masterAnalyser?: AnalyserNode } = {};
@@ -542,6 +564,7 @@ export class DawEngine {
   private ctx: AudioContext | null = null;
   private graph: Graph | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private worker: Worker | null = null;
   private nextStepTime = 0;
   private absStep = 0;
   private project: Project | null = null;
@@ -549,10 +572,14 @@ export class DawEngine {
   private raf = 0;
   private noise: AudioBuffer | null = null;
   private customCache = new Map<string, AudioBuffer>();
+  private customPending = new Map<string, Promise<AudioBuffer | null>>();
+  private previewBus: GainNode | null = null;
   playing = false;
   metronome = false;
   /** fires with the absolute step (0..SONG_BARS*16-1, or -1 when stopped) */
   onStep: ((step: number) => void) | null = null;
+
+  private resumeKickBound = false;
 
   async ensure(): Promise<AudioContext> {
     if (!this.ctx) {
@@ -560,9 +587,28 @@ export class DawEngine {
         window.AudioContext ||
         (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ctx = new AC({ latencyHint: "interactive" });
-      this.noise = noiseBuffer(this.ctx, 2);
+      this.noise = cachedNoise(this.ctx, 2);
+      // some browsers drop the context back to suspended (autoplay policy,
+      // device lock) — every later user gesture tries to revive it
+      if (!this.resumeKickBound) {
+        this.resumeKickBound = true;
+        const kick = () => {
+          if (this.ctx && this.ctx.state === "suspended") {
+            this.ctx.resume().catch(() => {});
+          }
+        };
+        window.addEventListener("pointerdown", kick, { passive: true });
+        window.addEventListener("keydown", kick, { passive: true });
+      }
     }
-    if (this.ctx.state === "suspended") await this.ctx.resume();
+    if (this.ctx.state === "suspended") {
+      // never hang on resume(): blocked autoplay / a stuck audio service
+      // must not freeze the transport — race it with a short timeout
+      await Promise.race([
+        this.ctx.resume().catch(() => {}),
+        new Promise<void>((r) => setTimeout(r, 1200)),
+      ]);
+    }
     return this.ctx;
   }
 
@@ -573,6 +619,8 @@ export class DawEngine {
     if (!this.graph) {
       this.graph = buildGraph(ctx, project, true);
     } else {
+      // adding/removing tracks mid-play must be heard immediately
+      this.rebuildIfTrackSetChanged(project);
       // update live params without rebuilding (cheap)
       const anySolo = project.tracks.some((t) => t.solo);
       this.graph.master.gain.setTargetAtTime(volGain(project.masterVolume), ctx.currentTime, 0.03);
@@ -599,6 +647,14 @@ export class DawEngine {
     const changed =
       existing.size !== wanted.size || project.tracks.some((t) => !existing.has(t.id));
     if (changed) {
+      // detach the old master chain so in-flight tails don't double up
+      // with the new graph (limiter feeds the shared SKAZI chain too)
+      try {
+        this.graph.limiter.disconnect();
+        this.graph.tail.disconnect();
+      } catch {
+        /* already gone */
+      }
       this.graph = buildGraph(this.ctx, project, true);
     }
   }
@@ -607,20 +663,64 @@ export class DawEngine {
     await this.sync(project);
     this.rebuildIfTrackSetChanged(project);
     if (!this.ctx || !this.graph) return;
+    if (this.ctx.state !== "running") {
+      // autoplay blocked / audio service unavailable — surface it instead
+      // of silently "playing" into a suspended context
+      throw new Error("audio-suspended");
+    }
     if (this.playing) this.stop();
     this.playing = true;
     this.absStep = 0;
     this.nextStepTime = this.ctx.currentTime + 0.06;
     this.queue = [];
     this.tick();
-    this.timer = setInterval(() => this.tick(), TICK_MS);
+    this.startTimer();
     this.pump();
+  }
+
+  /** worker timers keep firing when the tab is backgrounded — setInterval
+      gets throttled to 1/s and playback would stutter to silence */
+  private startTimer() {
+    this.stopTimer();
+    if (typeof Worker === "undefined") {
+      this.timer = setInterval(() => this.tick(), TICK_MS);
+      return;
+    }
+    try {
+      const code =
+        "let id=null;onmessage=e=>{if(e.data==='start'){if(id===null)id=setInterval(()=>postMessage(0)," +
+        TICK_MS +
+        ");}else{if(id!==null){clearInterval(id);id=null;}}}";
+      this.worker = new Worker(
+        URL.createObjectURL(new Blob([code], { type: "text/javascript" }))
+      );
+      this.worker.onmessage = () => this.tick();
+      this.worker.postMessage("start");
+    } catch {
+      this.worker = null;
+      this.timer = setInterval(() => this.tick(), TICK_MS);
+    }
+  }
+
+  private stopTimer() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    if (this.worker) {
+      try {
+        this.worker.postMessage("stop");
+        this.worker.terminate();
+      } catch {
+        /* noop */
+      }
+      this.worker = null;
+    }
   }
 
   stop() {
     this.playing = false;
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+    this.stopTimer();
     cancelAnimationFrame(this.raf);
     this.queue = [];
     // duck the master so ringing tails cut quickly instead of smearing
@@ -637,6 +737,11 @@ export class DawEngine {
     const spb = 60 / p.bpm;
     const stepDur = spb / 4;
     const loopSteps = SONG_BARS * 16;
+    // the context may have been suspended (tab sleep, device lock) —
+    // resync ahead instead of dumping a burst of stale steps at once
+    if (this.nextStepTime < this.ctx.currentTime - 0.12) {
+      this.nextStepTime = this.ctx.currentTime + 0.06;
+    }
     while (this.nextStepTime < this.ctx.currentTime + LOOKAHEAD_S) {
       const abs = this.absStep % loopSteps;
       const step = abs % 16;
@@ -719,13 +824,13 @@ export class DawEngine {
     }
   }
 
-  /** fire onStep callbacks in near-realtime */
+  /** fire onStep callbacks in near-realtime (drop stale items after tab sleep) */
   private pump = () => {
     if (!this.playing || !this.ctx) return;
     const now = this.ctx.currentTime;
     while (this.queue.length && this.queue[0].time <= now) {
       const item = this.queue.shift()!;
-      this.onStep?.(item.step);
+      if (now - item.time < 0.3) this.onStep?.(item.step);
     }
     this.raf = requestAnimationFrame(this.pump);
   };
@@ -745,11 +850,31 @@ export class DawEngine {
 
   /* ---- preview one-shots (pads, piano keys, landing) ---- */
 
+  /** previews share a gentle compressor so one-shots never clip the DAC */
+  private async previewDest(): Promise<AudioNode> {
+    const ctx = await this.ensure();
+    if (!this.previewBus) {
+      const comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = -8;
+      comp.knee.value = 6;
+      comp.ratio.value = 8;
+      comp.attack.value = 0.003;
+      comp.release.value = 0.2;
+      comp.connect(ctx.destination);
+      const bus = ctx.createGain();
+      bus.gain.value = 0.9;
+      bus.connect(comp);
+      this.previewBus = bus;
+    }
+    return this.previewBus;
+  }
+
   async previewDrum(sound: DrumSound, vel = 0.95, tune = 0, customDataUrl?: string | null) {
     const ctx = await this.ensure();
+    const dest = await this.previewDest();
     let buf: AudioBuffer | null = null;
     if (customDataUrl) buf = await this.decodeDataUrl(customDataUrl);
-    scheduleDrum(ctx, ctx.destination, sound, ctx.currentTime + 0.01, {
+    scheduleDrum(ctx, dest, sound, ctx.currentTime + 0.01, {
       vel,
       tune,
       customBuf: buf,
@@ -758,7 +883,8 @@ export class DawEngine {
 
   async previewSynth(p: SynthParams, pitch: number, durSec = 0.35, vel = 0.9) {
     const ctx = await this.ensure();
-    scheduleSynth(ctx, ctx.destination, p, pitch, vel, ctx.currentTime + 0.01, durSec);
+    const dest = await this.previewDest();
+    scheduleSynth(ctx, dest, p, pitch, vel, ctx.currentTime + 0.01, durSec);
   }
 
   /* ---- SKAZI bundle previews (routed through the master FX chain) ---- */
@@ -840,15 +966,24 @@ export class DawEngine {
     const ctx = await this.ensure();
     const cached = this.customCache.get(dataUrl);
     if (cached) return cached;
-    try {
-      const res = await fetch(dataUrl);
-      const arr = await res.arrayBuffer();
-      const buf = await ctx.decodeAudioData(arr);
-      this.customCache.set(dataUrl, buf);
-      return buf;
-    } catch {
-      return null;
-    }
+    // de-duplicate concurrent decodes (one fetch per sample, ever)
+    const pending = this.customPending.get(dataUrl);
+    if (pending) return pending;
+    const job = (async () => {
+      try {
+        const res = await fetch(dataUrl);
+        const arr = await res.arrayBuffer();
+        const buf = await ctx.decodeAudioData(arr);
+        this.customCache.set(dataUrl, buf);
+        return buf;
+      } catch {
+        return null;
+      } finally {
+        this.customPending.delete(dataUrl);
+      }
+    })();
+    this.customPending.set(dataUrl, job);
+    return job;
   }
 
   private customFor(sound: DrumSound): AudioBuffer | null | undefined {
