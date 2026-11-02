@@ -37,6 +37,10 @@ export interface SkaziDevice {
   params: SkaziParam[];
   presets?: Record<string, Record<string, number>>;
   presetsCount?: number;
+  /** upstream folder in github.com/slazoasher/skazi-bundle (official devices) */
+  repoPath?: string;
+  /** full feature inventory mirrored from the upstream bundle */
+  features?: string[];
 }
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
@@ -611,6 +615,241 @@ const extras: SkaziDevice[] = [
 ];
 
 SKAZI_DEVICES.push(...extras);
+
+/* ------------------------------------------------------------------ */
+/*  Upstream repo inventory — every official device mapped to its      */
+/*  folder in github.com/slazoasher/skazi-bundle, with the full        */
+/*  feature list from the bundle manifest. Our Web Audio ports aim     */
+/*  to cover this whole list, device by device.                        */
+/* ------------------------------------------------------------------ */
+
+export const SKAZI_REPO_URL = "https://github.com/slazoasher/skazi-bundle";
+
+const REPO_INFO: Record<string, { path: string; features: string[] }> = {
+  skazi: {
+    path: "SKAZI-Synth",
+    features: [
+      "Virus-style supersaw unison + analog drift",
+      "Wavetables — load your own WAV",
+      "FOLD / PWM / ASYM shaping",
+      "Arpeggiator + step sequencer with per-step locks",
+      "10 distortion types",
+      "Full FX rack with FX filter + bass-mono width",
+      "PERFORM page: 4 macros, A/B morph, kick duck, voice cards",
+      "RANDOM rolls every section",
+      "3,650 presets",
+    ],
+  },
+  bully: {
+    path: "Bully",
+    features: [
+      "3 oscillators with dual warp",
+      "2 filters",
+      "10 LFOs + chaos modulation",
+      "Mod matrix",
+      "FX rack + arpeggiator",
+      "Analog character: drift, saturation, boost, spread",
+      "SHARP-24 zero-delay-feedback ladder filter",
+      "462 presets",
+    ],
+  },
+  kube: {
+    path: "Kube",
+    features: [
+      "24 KUBE-only wavetables (growl, yoy…)",
+      "Serum .wav wavetable import (drag & drop)",
+      "2 warp slots per osc: sync, bend, PWM, asym, mirror, flip, quantize, FM/AM/RM",
+      "16-voice unison with blend",
+      "Lime-on-black skin",
+      "106 presets",
+    ],
+  },
+  subich: {
+    path: "Subich",
+    features: [
+      "2 oscillators + dedicated sub",
+      "2 filters + 2 LFOs",
+      "Mod wheels",
+      "1,000 presets",
+    ],
+  },
+  tbon303: {
+    path: "TBON303",
+    features: [
+      "303-style diode-ladder filter, self-oscillating at the top",
+      "Accent + slide",
+      "Sub oscillator",
+      "14 drive types",
+      "Circuit mods",
+      "Chorus / delay / reverb / widener",
+      "16-step sequencer with pattern generator",
+      "544 presets incl. 32 HARD ACID",
+    ],
+  },
+  skacid: {
+    path: "Skacid",
+    features: [
+      "303 voice with 24/18/12 dB + band filters",
+      "Accent + slide",
+      "16-step sequencer with chance, MUTATE, ratchet, swing, drift",
+      "SEQ / ARP / MIDI play modes",
+      "CRUNCH / FUZZ / FOLD / RECTIFY / CRUSH distortion",
+      "OTT + ping-pong delay + reverb",
+      "129 presets",
+    ],
+  },
+  kickass: {
+    path: "Kickass",
+    features: [
+      "Two-stage pitch: snap + sweep",
+      "Hold / decay envelope",
+      "3-band EQ",
+      "Sample layer with a browser for your own kicks",
+      "Key track",
+      "50 presets",
+    ],
+  },
+  bamba: {
+    path: "Bamba",
+    features: [
+      "Synth risers + uplift maker",
+      "Sample layer: riser/uplift sounds, short/long, stretch to bars",
+      "Snare rolls + gated uplifts, quantized 1/2…1/128 with automatable RATE",
+      "Mixer with FX sends",
+      "Pitch up to +6 octaves with its own curve",
+      "1…24 bars",
+      "260 presets with impacts & FX section",
+    ],
+  },
+  midigod: {
+    path: "MidiGod",
+    features: [
+      "10 genres × 9 roles pattern generator",
+      "Key / scale / groove controls",
+      "ROLL BASS engine: styles, syncopation, kick avoid, octave jump, pitch dip, glide, groove, variation, evolve, mutate",
+      "Drag the loop into the DAW as MIDI",
+      "Audio-to-MIDI: melody, bass, drums, chords — follows glides",
+      "126 presets",
+    ],
+  },
+  pitapump: {
+    path: "PitaPump",
+    features: [
+      "Sidechain LFO tool",
+      "Pumping curves synced to the beat",
+    ],
+  },
+  shaksuka: {
+    path: "Shaksuka",
+    features: ["Random chop & glitch FX", "Tempo-synced chopping"],
+  },
+  filterfish: {
+    path: "FilterFish",
+    features: [
+      "Morphing filter with LFO + envelope",
+      "Distortion + glitch",
+      "Chorus + flanger",
+      "Tempo-synced delay",
+      "Reverb: 11 types incl. SKAZI REVERB halls — hall, plate, room, chamber, cathedral, spring, shimmer, reverse, gated, blackhole",
+      "Decay + pre-delay, inflator, ON/OFF",
+      "800 presets",
+    ],
+  },
+  tahini: {
+    path: "Tahini",
+    features: [
+      "7 delay types: ping-pong, stereo, tape, digital, BBD, multi-tap, dual",
+      "Resonant low/high cut",
+      "Tape / tube / fuzz / crush drive inside the echo loop",
+      "Pitch on the repeats ±24 st + shimmer blend",
+      "Reverse + tape stops",
+      "Reverb with duck and freeze",
+      "250 presets",
+    ],
+  },
+  salat: {
+    path: "Salat",
+    features: [
+      "Tempo-synced chopper: stutter, reverse, gate, tape stop, hold",
+      "Drive + crush",
+      "Resonant filter with synced LFO",
+      "Ring mod",
+      "Flanger / chorus",
+      "Ping-pong delay + reverb",
+      "MAKE A SALAT randomizer",
+      "104 presets",
+    ],
+  },
+  quazi: {
+    path: "Quazi",
+    features: [
+      "4-band distortion on a Linkwitz-Riley crossover with draggable splits",
+      "SOFT / HARD / FUZZ / TUBE per band at 4x oversampling",
+      "Phase-matched dry/wet mix",
+      "Stereo width with MONO BASS",
+      "3-band post EQ (low shelf, bell, high shelf)",
+      "104 presets",
+    ],
+  },
+  skilter: {
+    path: "Skilter",
+    features: [
+      "LP → BP → HP → notch morph",
+      "12-48 dB slopes, self-oscillating resonance",
+      "LFO + envelope follower",
+      "16-step BPM-synced sequencer",
+      "Tube / tape / hard drive, pre or post",
+      "Macro knob, 1x/2x/4x oversampling",
+      "Stereo / Mid-Side / Dual L-R",
+      "Live spectrum + scope, RANDOM",
+      "150 presets",
+    ],
+  },
+  skwide: {
+    path: "Skwide",
+    features: [
+      "Width 0-200% that never cancels in mono",
+      "10-stage allpass MONO SPREAD",
+      "PHASE wheel with drift",
+      "Psychoacoustic DEPTH (near/far)",
+      "LR4 LOW BYPASS + MONO BASS",
+      "Haas SUPER WIDE 0-30 ms with MONO SAFE",
+      "Wet/dry MIX + frequency imager",
+      "Lissajous/polar scope with correlation readout",
+      "70 presets",
+    ],
+  },
+  zhug: {
+    path: "Zhug",
+    features: [
+      "Saturator + widener",
+      "4x oversampled",
+      "Multiband",
+    ],
+  },
+  skverb: {
+    path: "Skverb",
+    features: [
+      "10 algorithms: hall, plate, room, chamber, cathedral, spring, shimmer, reverse, gated, blackhole",
+      "8-line FDN engine",
+      "Pre-delay with echo FEEDBACK + tempo SYNC",
+      "FREEZE + DUCK + DRIVE",
+      "Shimmer pitch loop in any mode",
+      "REVERSE layer",
+      "Resonant TAIL FILTER: LP/BP/HP with envelope sweep",
+      "Width",
+      "75 presets",
+    ],
+  },
+};
+
+SKAZI_DEVICES.forEach((d) => {
+  const info = REPO_INFO[d.id];
+  if (info) {
+    d.repoPath = info.path;
+    d.features = info.features;
+  }
+});
 
 /* ---------------- helpers ---------------- */
 

@@ -850,6 +850,23 @@ export function SkaziTab({
           </span>
         </div>
 
+        {/* upstream feature inventory — mirrored from the SKAZI bundle repo */}
+        {device.features && device.features.length > 0 && (
+          <details className="mb-4 rounded-lg border border-white/5 bg-black/20 px-3 py-2" open>
+            <summary className="cursor-pointer select-none font-mono text-[9px] uppercase tracking-widest text-[#a89f91]">
+              Full feature set · upstream folder: {device.repoPath ?? "—"}
+            </summary>
+            <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto pr-1">
+              {device.features.map((feat) => (
+                <li key={feat} className="flex items-start gap-1.5 text-[11.5px] leading-snug text-[#c9c0b2]">
+                  <span aria-hidden className="mt-[3px] h-1 w-1 shrink-0 rounded-full" style={{ background: device.accent }} />
+                  {feat}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+
         {device.kind === "synth" && (
           <SynthPanel device={device} params={instParams} onSet={onSet} onPreset={onPreset} />
         )}

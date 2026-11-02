@@ -81,7 +81,6 @@ export function Studio({ onClose }: { onClose: () => void }) {
   const [projectsOpen, setProjectsOpen] = useState(false);
   const [started, setStarted] = useState(false);
   const [metro, setMetro] = useState(false);
-  const [histTick, setHistTick] = useState(0);
   const stepRef = useRef<(s: number) => void>(() => {});
   const projectRef = useRef<Project | null>(project);
 
@@ -90,6 +89,12 @@ export function Studio({ onClose }: { onClose: () => void }) {
   const future = useRef<Project[]>([]);
   const prevRef = useRef<Project | null>(null);
   const skipHist = useRef(false);
+  // mirror lengths into state so render never touches refs
+  const [histLen, setHistLen] = useState({ past: 0, future: 0 });
+  const syncHistLen = useCallback(
+    () => setHistLen({ past: past.current.length, future: future.current.length }),
+    []
+  );
 
   useEffect(() => {
     projectRef.current = project;
@@ -103,10 +108,10 @@ export function Studio({ onClose }: { onClose: () => void }) {
       past.current.push(prevRef.current);
       if (past.current.length > 80) past.current.shift();
       future.current = [];
-      setHistTick((t) => t + 1);
+      syncHistLen();
     }
     prevRef.current = project;
-  }, [project]);
+  }, [project, syncHistLen]);
 
   const undo = useCallback(() => {
     if (!past.current.length) return;
@@ -114,8 +119,8 @@ export function Studio({ onClose }: { onClose: () => void }) {
     if (projectRef.current) future.current.push(projectRef.current);
     skipHist.current = true;
     setProject(prev);
-    setHistTick((t) => t + 1);
-  }, []);
+    syncHistLen();
+  }, [syncHistLen]);
 
   const redo = useCallback(() => {
     if (!future.current.length) return;
@@ -123,8 +128,8 @@ export function Studio({ onClose }: { onClose: () => void }) {
     if (projectRef.current) past.current.push(projectRef.current);
     skipHist.current = true;
     setProject(next);
-    setHistTick((t) => t + 1);
-  }, []);
+    syncHistLen();
+  }, [syncHistLen]);
 
   // keep engine in sync while playing
   useEffect(() => {
@@ -525,7 +530,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
           <div className="flex items-center overflow-hidden rounded-lg border border-white/8">
             <button
               onClick={undo}
-              disabled={!past.current.length}
+              disabled={histLen.past === 0}
               className="px-2 py-1.5 font-mono text-[12px] text-[#a89f91] hover:bg-white/5 hover:text-[#f0ece4] disabled:opacity-30"
               title="Undo (Ctrl+Z)"
               aria-label="Undo"
@@ -535,7 +540,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
             <span className="h-5 w-px bg-white/8" />
             <button
               onClick={redo}
-              disabled={!future.current.length}
+              disabled={histLen.future === 0}
               className="px-2 py-1.5 font-mono text-[12px] text-[#a89f91] hover:bg-white/5 hover:text-[#f0ece4] disabled:opacity-30"
               title="Redo (Ctrl+Shift+Z)"
               aria-label="Redo"
