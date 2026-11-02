@@ -1,18 +1,22 @@
 "use client";
 
-import type { DrumSound, DrumStep, Project } from "@/lib/daw/types";
+import { memo } from "react";
+import type { DrumSound, DrumStep, KitPreset, Project } from "@/lib/daw/types";
+import { KIT_PRESETS } from "@/lib/daw/types";
 import { cn } from "@/lib/utils";
 
-export function BeatsTab({
+function BeatsTabInner({
   project,
   updateProject,
   currentStep,
   onPreview,
+  onApplyKit,
 }: {
   project: Project;
   updateProject: (fn: (p: Project) => Project) => void;
   currentStep: number;
   onPreview: (sound: DrumSound, vel: number) => void;
+  onApplyKit: (kit: KitPreset) => void;
 }) {
   const drums = project.tracks.filter((t) => t.kind === "drum");
 
@@ -58,6 +62,23 @@ export function BeatsTab({
 
   return (
     <div className="space-y-2">
+      {/* drum kit presets */}
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+        <span className="shrink-0 font-mono text-[9px] uppercase tracking-widest text-[#a89f91]">
+          Kit
+        </span>
+        {KIT_PRESETS.map((k) => (
+          <button
+            key={k.name}
+            onClick={() => onApplyKit(k)}
+            className="shrink-0 rounded-full border border-white/8 bg-[#14100d] px-2.5 py-1 text-[11px] text-[#a89f91] transition-colors hover:border-[#f2a43a]/50 hover:text-[#f0ece4]"
+            title={`${k.name} (${k.tag}) — retunes and balances the drum tracks`}
+          >
+            {k.name}
+          </button>
+        ))}
+      </div>
+
       {drums.map((t) => (
         <div
           key={t.id}
@@ -137,8 +158,10 @@ export function BeatsTab({
         </div>
       ))}
       <div className="pt-1 text-center font-mono text-[10px] tracking-wide text-[#a89f91]/70">
-        CLICK A STEP TO TOGGLE · SHIFT+CLICK CYCLES VELOCITY
+        CLICK A STEP TO TOGGLE · SHIFT+CLICK CYCLES VELOCITY · KITS RETUNE THE DRUMS
       </div>
     </div>
   );
 }
+
+export const BeatsTab = memo(BeatsTabInner);

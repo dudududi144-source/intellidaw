@@ -33,7 +33,10 @@ function MixerTabInner({
           return (
             <div
               key={t.id}
-              className="rounded-xl border border-white/5 bg-[#14100d] p-3"
+              className={cn(
+                "rounded-xl border p-3",
+                audible ? "border-white/5 bg-[#14100d]" : "border-white/5 bg-[#14100d]/60"
+              )}
             >
               <div className="flex items-center gap-2 pb-2">
                 <span
@@ -106,7 +109,48 @@ function MixerTabInner({
                   </div>
                 </div>
               </div>
-              <div className="mt-2 space-y-1.5 border-t border-white/5 pt-2">
+
+              {/* 3-band EQ */}
+              <div className="mt-2 space-y-1 border-t border-white/5 pt-2">
+                <div className="flex justify-between font-mono text-[8px] uppercase tracking-wider text-[#a89f91]">
+                  <span>EQ</span>
+                  <span>
+                    {t.eqLow !== 0 || t.eqMid !== 0 || t.eqHigh !== 0 ? "shaping" : "flat"}
+                  </span>
+                </div>
+                {(
+                  [
+                    ["eqLow", "L", "accent-[#e5c15a]"],
+                    ["eqMid", "M", "accent-[#d97b5a]"],
+                    ["eqHigh", "H", "accent-[#8fbf6b]"],
+                  ] as const
+                ).map(([key, label, accent]) => (
+                  <div key={key} className="flex items-center gap-1.5">
+                    <span className="w-3 font-mono text-[9px] text-[#a89f91]">{label}</span>
+                    <input
+                      type="range"
+                      min={-12}
+                      max={12}
+                      step={0.5}
+                      value={t[key]}
+                      onChange={(e) => setTrack(t.id, { [key]: Number(e.target.value) } as Partial<Track>)}
+                      className={cn("h-1 flex-1 cursor-pointer appearance-none rounded-full bg-white/10", accent)}
+                      aria-label={`${label} EQ ${Math.round(t[key])} dB`}
+                    />
+                    <span
+                      className={cn(
+                        "w-8 text-right font-mono text-[9px]",
+                        t[key] === 0 ? "text-[#a89f91]" : "text-[#f0ece4]"
+                      )}
+                    >
+                      {t[key] > 0 ? "+" : ""}
+                      {t[key].toFixed(1)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-1.5 space-y-1.5 border-t border-white/5 pt-2">
                 <div className="flex items-center gap-1.5">
                   <span className="w-8 font-mono text-[9px] uppercase text-[#a89f91]">Dly</span>
                   <input
@@ -180,12 +224,18 @@ function MixerTabInner({
                 </div>
                 <div className="font-mono text-[10px] text-[#f2a43a]">ON · −6 dB</div>
               </div>
+              <div className="mt-1 rounded-md bg-black/40 px-2 py-1.5 text-center">
+                <div className="font-mono text-[9px] uppercase tracking-wider text-[#a89f91]">
+                  Song key
+                </div>
+                <div className="font-mono text-[10px] text-[#f0ece4]">{project.songKey}</div>
+              </div>
             </div>
           </div>
         </div>
       </div>
       <div className="text-center font-mono text-[10px] tracking-wide text-[#a89f91]/70">
-        SHARED BUSES: DOTTED-8TH DELAY + CONVOLUTION REVERB · SENDS PER CHANNEL
+        3-BAND EQ PER CHANNEL (LOW 90HZ · MID 1K · HIGH 7.5K) · BUSES: DOTTED-8TH DELAY + REVERB · SENDS PER CHANNEL
       </div>
     </div>
   );

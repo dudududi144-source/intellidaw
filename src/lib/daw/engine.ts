@@ -5,6 +5,7 @@
 /* ------------------------------------------------------------------ */
 
 import type { DrumSound, Note, Project, SynthTrack, Waveform } from "./types";
+import { SONG_BARS, sectionAtBar } from "./types";
 import { getSkaziChainFor, refreshSkaziChain, type SkaziChain } from "./skaziAudio";
 import { scheduleSkaziVoice, acidNote, bambaRiser, type VoiceParams } from "./skaziAudio";
 import { skaziStore } from "./skazi";
@@ -373,6 +374,9 @@ export function scheduleSynth(
 
 interface Channel {
   input: GainNode;
+  eqLow: BiquadFilterNode;
+  eqMid: BiquadFilterNode;
+  eqHigh: BiquadFilterNode;
   pan: StereoPannerNode;
   gain: GainNode;
   analyser?: AnalyserNode;
@@ -382,6 +386,8 @@ interface Channel {
 
 interface Graph {
   master: GainNode;
+  drive: WaveShaperNode;
+  filter: BiquadFilterNode;
   limiter: DynamicsCompressorNode;
   channels: Map<string, Channel>;
   delayIn: GainNode;
@@ -389,16 +395,39 @@ interface Graph {
   delayNode: DelayNode;
 }
 
+function driveCurve(amount: number): Float32Array {
+  const n = 1024;
+  const curve = new Float32Array(n);
+  const k = Math.max(0.0001, amount) * 6;
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    curve[i] = Math.tanh(k * x) / Math.tanh(k);
+  }
+  return curve;
+}
+
 function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Graph {
   const master = ctx.createGain();
   master.gain.value = volGain(project.masterVolume);
+
+  // live FX: gentle drive then a master filter, then the safety limiter
+  const drive = ctx.createWaveShaper();
+  drive.curve = driveCurve(0);
+  drive.oversample = "2x";
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.value = 18000;
+  filter.Q.value = 0.4;
+  master.connect(drive);
+  drive.connect(filter);
+
   const limiter = ctx.createDynamicsCompressor();
   limiter.threshold.value = -6;
   limiter.knee.value = 0;
   limiter.ratio.value = 16;
   limiter.attack.value = 0.002;
   limiter.release.value = 0.12;
-  master.connect(limiter);
+  filter.connect(limiter);
 
   let tail: AudioNode = limiter;
   const chain: SkaziChain | null = getSkaziChainOrNull(ctx);
@@ -446,12 +475,28 @@ function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Gra
   const anySolo = project.tracks.some((t) => t.solo);
   for (const t of project.tracks) {
     const input = ctx.createGain();
+    const eqLow = ctx.createBiquadFilter();
+    eqLow.type = "lowshelf";
+    eqLow.frequency.value = 90;
+    eqLow.gain.value = t.eqLow ?? 0;
+    const eqMid = ctx.createBiquadFilter();
+    eqMid.type = "peaking";
+    eqMid.frequency.value = 1000;
+    eqMid.Q.value = 0.9;
+    eqMid.gain.value = t.eqMid ?? 0;
+    const eqHigh = ctx.createBiquadFilter();
+    eqHigh.type = "highshelf";
+    eqHigh.frequency.value = 7500;
+    eqHigh.gain.value = t.eqHigh ?? 0;
     const pan = ctx.createStereoPanner();
     pan.pan.value = t.pan;
     const gain = ctx.createGain();
     const audible = !t.muted && (!anySolo || t.solo);
     gain.gain.value = audible ? volGain(t.volume) : 0;
-    input.connect(pan);
+    input.connect(eqLow);
+    eqLow.connect(eqMid);
+    eqMid.connect(eqHigh);
+    eqHigh.connect(pan);
     pan.connect(gain);
     gain.connect(master);
 
@@ -465,9 +510,9 @@ function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Gra
     gain.connect(reverbSend);
     reverbSend.connect(reverbIn);
 
-    channels.set(t.id, { input, pan, gain, delaySend, reverbSend });
+    channels.set(t.id, { input, eqLow, eqMid, eqHigh, pan, gain, delaySend, reverbSend });
   }
-  return { master, limiter, channels, delayIn, reverbIn, delayNode: delay };
+  return { master, drive, filter, limiter, channels, delayIn, reverbIn, delayNode: delay };
 }
 
 const graphExtras: { masterAnalyser?: AnalyserNode } = {};
@@ -505,6 +550,8 @@ export class DawEngine {
   private noise: AudioBuffer | null = null;
   private customCache = new Map<string, AudioBuffer>();
   playing = false;
+  metronome = false;
+  /** fires with the absolute step (0..SONG_BARS*16-1, or -1 when stopped) */
   onStep: ((step: number) => void) | null = null;
 
   async ensure(): Promise<AudioContext> {
@@ -534,6 +581,9 @@ export class DawEngine {
         const ch = this.graph.channels.get(t.id);
         if (!ch) continue;
         ch.pan.pan.setTargetAtTime(t.pan, ctx.currentTime, 0.03);
+        ch.eqLow.gain.setTargetAtTime(t.eqLow ?? 0, ctx.currentTime, 0.04);
+        ch.eqMid.gain.setTargetAtTime(t.eqMid ?? 0, ctx.currentTime, 0.04);
+        ch.eqHigh.gain.setTargetAtTime(t.eqHigh ?? 0, ctx.currentTime, 0.04);
         const audible = !t.muted && (!anySolo || t.solo);
         ch.gain.gain.setTargetAtTime(audible ? volGain(t.volume) : 0, ctx.currentTime, 0.03);
         ch.delaySend.gain.setTargetAtTime(t.delaySend, ctx.currentTime, 0.03);
@@ -586,31 +636,62 @@ export class DawEngine {
     const p = this.project;
     const spb = 60 / p.bpm;
     const stepDur = spb / 4;
+    const loopSteps = SONG_BARS * 16;
     while (this.nextStepTime < this.ctx.currentTime + LOOKAHEAD_S) {
-      const step = this.absStep % 16;
+      const abs = this.absStep % loopSteps;
+      const step = abs % 16;
+      const bar = Math.floor(abs / 16);
       const swingOffset = step % 2 === 1 ? p.swing * stepDur * 0.5 : 0;
       const time = this.nextStepTime + swingOffset;
-      this.scheduleStep(p, this.graph!, step, time, stepDur);
-      this.queue.push({ step, time });
+      this.scheduleStep(p, this.graph!, step, bar, time, stepDur);
+      if (this.metronome) this.click(time, step === 0);
+      this.queue.push({ step: abs, time });
       this.nextStepTime += stepDur;
       this.absStep++;
     }
+  }
+
+  /** short metronome blip routed straight to the output (never rendered) */
+  private click(time: number, accent: boolean) {
+    if (!this.ctx) return;
+    const o = this.ctx.createOscillator();
+    o.type = "sine";
+    o.frequency.value = accent ? 1568 : 1046;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, time);
+    g.gain.linearRampToValueAtTime(accent ? 0.5 : 0.3, time + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, time + 0.05);
+    o.connect(g).connect(this.ctx.destination);
+    o.start(time);
+    o.stop(time + 0.08);
+  }
+
+  /** jump the transport to an absolute step (quantised scenes / loop seek) */
+  jumpTo(absStep: number) {
+    if (!this.ctx) return;
+    this.absStep = Math.max(0, Math.floor(absStep));
+    this.nextStepTime = this.ctx.currentTime + 0.05;
+    this.queue = [];
   }
 
   private scheduleStep(
     p: Project,
     graph: Graph,
     step: number,
+    bar: number,
     time: number,
     stepDur: number
   ) {
     const ctx = this.ctx!;
     const anySolo = p.tracks.some((t) => t.solo);
+    const section = sectionAtBar(p.sections, bar);
     for (const t of p.tracks) {
       const ch = graph.channels.get(t.id);
       if (!ch) continue;
       const audible = !t.muted && (!anySolo || t.solo);
       if (!audible) continue;
+      // arrangement: tracks muted for this section stay silent
+      if (section?.mutes.includes(t.id)) continue;
       if (t.kind === "drum") {
         const s = t.steps[step];
         if (s?.on) {
@@ -648,6 +729,19 @@ export class DawEngine {
     }
     this.raf = requestAnimationFrame(this.pump);
   };
+
+  /* ---- live FX on the master bus ---- */
+
+  setLiveFilter(norm: number) {
+    if (!this.ctx || !this.graph) return;
+    const hz = 60 * Math.pow(300, Math.min(1, Math.max(0, norm))); // 60Hz..18kHz
+    this.graph.filter.frequency.setTargetAtTime(hz, this.ctx.currentTime, 0.03);
+  }
+
+  setLiveDrive(amount: number) {
+    if (!this.ctx || !this.graph) return;
+    this.graph.drive.curve = driveCurve(Math.min(1, Math.max(0, amount)) * 0.5);
+  }
 
   /* ---- preview one-shots (pads, piano keys, landing) ---- */
 
@@ -804,7 +898,7 @@ export class DawEngine {
 
   /* ---- offline render → WAV ---- */
 
-  async renderWav(project: Project, bars: number): Promise<Blob> {
+  private async renderOffline(project: Project, bars: number, only?: string | null): Promise<AudioBuffer> {
     const spb = 60 / project.bpm;
     const stepDur = spb / 4;
     const totalSteps = bars * 16;
@@ -818,16 +912,21 @@ export class DawEngine {
         padBufs.set(pad.sound, await this.decodeDataUrl(pad.custom.dataUrl));
       }
     }
-    const anySolo = project.tracks.some((t) => t.solo);
+    const wantSolo = project.tracks.filter((t) => t.solo);
+    const soloSet = wantSolo.length ? new Set(wantSolo.map((t) => t.id)) : null;
     let t = 0.05;
     for (let i = 0; i < totalSteps; i++) {
       const step = i % 16;
+      const bar = Math.floor(i / 16) % SONG_BARS;
+      const section = sectionAtBar(project.sections, bar);
       const swingOffset = step % 2 === 1 ? project.swing * stepDur * 0.5 : 0;
       const time = t + swingOffset;
       for (const track of project.tracks) {
+        if (only && track.id !== only) continue;
         const ch = graph.channels.get(track.id);
         if (!ch) continue;
-        const audible = !track.muted && (!anySolo || track.solo);
+        const audible =
+          !track.muted && (!soloSet || soloSet.has(track.id)) && !(only && section?.mutes.includes(track.id));
         if (!audible) continue;
         if (track.kind === "drum") {
           const s = track.steps[step];
@@ -848,8 +947,65 @@ export class DawEngine {
       }
       t += stepDur;
     }
-    const rendered = await off.startRendering();
+    return off.startRendering();
+  }
+
+  async renderWav(project: Project, bars: number): Promise<Blob> {
+    const rendered = await this.renderOffline(project, bars, null);
     return encodeWav(rendered);
+  }
+
+  /** raw rendered AudioBuffer (used for loudness analysis / visualisation) */
+  async renderBuffer(project: Project, bars: number): Promise<AudioBuffer> {
+    return this.renderOffline(project, bars, null);
+  }
+
+  /** stem export — renders a single track exactly as it sits in the mix */
+  async renderStemWav(project: Project, bars: number, trackId: string): Promise<Blob> {
+    const rendered = await this.renderOffline(project, bars, trackId);
+    return encodeWav(rendered);
+  }
+
+  /** ITU-R BS.1770 style integrated loudness (simplified K-weighting), in LUFS */
+  async measureLufs(buffer: AudioBuffer): Promise<number> {
+    const kOff = new OfflineAudioContext(buffer.numberOfChannels, buffer.length, buffer.sampleRate);
+    const src = kOff.createBufferSource();
+    src.buffer = buffer;
+    // K-weighting approximation: head high-shelf +4 dB, then 38 Hz high-pass
+    const shelf = kOff.createBiquadFilter();
+    shelf.type = "highshelf";
+    shelf.frequency.value = 1500;
+    shelf.gain.value = 4;
+    const hp = kOff.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 38;
+    hp.Q.value = 0.5;
+    src.connect(shelf).connect(hp).connect(kOff.destination);
+    src.start();
+    const weighted = await kOff.startRendering();
+
+    const blockLen = Math.floor(weighted.sampleRate * 0.4);
+    const hop = Math.floor(weighted.sampleRate * 0.1);
+    const powers: number[] = [];
+    for (let start = 0; start + blockLen <= weighted.length; start += hop) {
+      let sum = 0;
+      for (let c = 0; c < weighted.numberOfChannels; c++) {
+        const d = weighted.getChannelData(c);
+        let s = 0;
+        for (let i = start; i < start + blockLen; i++) s += d[i] * d[i];
+        sum += s / blockLen;
+      }
+      powers.push(sum / weighted.numberOfChannels);
+    }
+    const loud = (meanSq: number) => -0.691 + 10 * Math.log10(Math.max(meanSq, 1e-12));
+    const above = powers.filter((p) => loud(p) > -70);
+    if (!above.length) return -70;
+    const mean = above.reduce((a, b) => a + b, 0) / above.length;
+    const rel = loud(mean) - 10;
+    const gated = above.filter((p) => loud(p) > rel);
+    if (!gated.length) return Math.round(loud(mean) * 10) / 10;
+    const gmean = gated.reduce((a, b) => a + b, 0) / gated.length;
+    return Math.round(loud(gmean) * 10) / 10;
   }
 }
 

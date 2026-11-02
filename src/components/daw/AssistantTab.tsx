@@ -106,8 +106,59 @@ export function AssistantTab({
     return [...ai, ...rules.map((q) => ({ ...q, source: "rule" as const }))];
   }, [ai, local]);
 
+  // health score — fixes weigh more than improvements
+  const score = useMemo(() => {
+    const fixes = insights.filter((i) => i.severity === "fix").length;
+    const improves = insights.filter((i) => i.severity === "improve").length;
+    return Math.max(40, Math.min(100, 100 - fixes * 12 - improves * 5));
+  }, [insights]);
+  const scoreColor = score >= 85 ? "#8fbf6b" : score >= 65 ? "#f2a43a" : "#e5533d";
+  const R = 20;
+  const C = 2 * Math.PI * R;
+
   return (
     <div className="space-y-4">
+      {/* health score header */}
+      <div className="flex flex-wrap items-center gap-4 rounded-xl border border-white/8 bg-[#14100d] p-4">
+        <div className="relative h-14 w-14 shrink-0" role="img" aria-label={`Project health ${score} out of 100`}>
+          <svg viewBox="0 0 48 48" className="h-14 w-14 -rotate-90">
+            <circle cx="24" cy="24" r={R} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="4" />
+            <circle
+              cx="24"
+              cy="24"
+              r={R}
+              fill="none"
+              stroke={scoreColor}
+              strokeWidth="4"
+              strokeLinecap="round"
+              strokeDasharray={C}
+              strokeDashoffset={C * (1 - score / 100)}
+            />
+          </svg>
+          <span
+            className="absolute inset-0 flex items-center justify-center font-mono text-[15px] font-bold"
+            style={{ color: scoreColor }}
+          >
+            {score}
+          </span>
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[15px] font-semibold text-[#f0ece4]">What should we improve?</div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {[`${project.bpm} BPM`, project.songKey, `${project.tracks.length} tracks`, `${insights.length} tips`].map(
+              (chip) => (
+                <span
+                  key={chip}
+                  className="rounded-full bg-white/5 px-2.5 py-0.5 font-mono text-[10px] text-[#a89f91]"
+                >
+                  {chip}
+                </span>
+              )
+            )}
+          </div>
+        </div>
+      </div>
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <PanelTitle kicker="Studio assistant · deep scan">
           A second pair of ears that reads your whole song
@@ -184,7 +235,7 @@ export function AssistantTab({
       <div className="rounded-xl border border-white/5 bg-[#14100d] p-4">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {[
-            ["Key", stats.key],
+            ["Key", project.songKey],
             ["BPM", String(stats.bpm)],
             ["Notes", String(stats.noteCount)],
             ["Drum hits", String(stats.drumCount)],

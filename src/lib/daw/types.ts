@@ -42,6 +42,49 @@ export interface ChannelStrip {
   solo: boolean;
   delaySend: number; // 0..1
   reverbSend: number; // 0..1
+  eqLow: number; // dB -12..12 (low shelf @ 90Hz)
+  eqMid: number; // dB -12..12 (peak @ 1kHz)
+  eqHigh: number; // dB -12..12 (high shelf @ 7kHz)
+}
+
+/* ---------------- song arrangement ---------------- */
+
+export const SONG_BARS = 4; // every project is a 4-bar arrangement
+
+export interface Section {
+  id: string;
+  name: string;
+  color: string;
+  startBar: number; // inclusive
+  endBar: number; // exclusive
+  /** track ids silenced while this section plays (the arrangement build) */
+  mutes: string[];
+}
+
+export const SECTION_PRESETS: Array<{ name: string; color: string }> = [
+  { name: "Intro", color: "#b8a98f" },
+  { name: "Groove", color: "#8fbf6b" },
+  { name: "Hook", color: "#f2a43a" },
+  { name: "Outro", color: "#e5c15a" },
+];
+
+/** Build one section per bar covering the whole song */
+export function autoSections(tracks: Track[], quietFirst: boolean): Section[] {
+  const ids = tracks.map((t) => t.id);
+  return SECTION_PRESETS.map(({ name, color }, i) => ({
+    id: `sec${i}_${uid()}`,
+    name,
+    color,
+    startBar: i,
+    endBar: i + 1,
+    // intro thins the drums/bass out, hook plays everything, outro drops the lead
+    mutes:
+      i === 0 && quietFirst
+        ? ids.filter((_, idx) => idx > 1 && idx < ids.length - 2)
+        : i === SECTION_PRESETS.length - 1
+          ? ids.filter((t2) => /lead|acid|bell|stab|303/i.test(tracks.find((t) => t.id === t2)?.name ?? ""))
+          : [],
+  }));
 }
 
 export interface DrumTrack extends ChannelStrip {
@@ -89,6 +132,8 @@ export interface Project {
   bpm: number;
   swing: number; // 0..0.6
   masterVolume: number;
+  songKey: string; // e.g. "A minor"
+  sections: Section[]; // SONG_BARS sections, one per bar
   tracks: Track[];
   pads: KitPad[];
   updatedAt: number;
@@ -115,6 +160,9 @@ const ch = (o: Partial<ChannelStrip> = {}): ChannelStrip => ({
   solo: false,
   delaySend: 0,
   reverbSend: 0,
+  eqLow: 0,
+  eqMid: 0,
+  eqHigh: 0,
   ...o,
 });
 
@@ -211,16 +259,8 @@ export function defaultPads(): KitPad[] {
 }
 
 export function createDefaultProject(): Project {
-  return {
-    id: uid(),
-    name: "Midnight Drive",
-    bpm: 100,
-    swing: 0.08,
-    masterVolume: 0.9,
-    updatedAt: Date.now(),
-    pads: defaultPads(),
-    tracks: [
-      makeDrumTrack("kick", "Kick", "#f2a43a", [0, 4, 8, 12]),
+  const tracks: Track[] = [
+    makeDrumTrack("kick", "Kick", "#f2a43a", [0, 4, 8, 12]),
       makeDrumTrack("snare", "Snare", "#e5c15a", [4, 12]),
       makeDrumTrack("chat", "C Hat", "#d97b5a", [2, 6, 10, 14], {
         volume: 0.6,
@@ -317,7 +357,18 @@ export function createDefaultProject(): Project {
           note(0, 16, 57, 0.5),
         ]
       ),
-    ],
+    ];
+  return {
+    id: uid(),
+    name: "Midnight Drive",
+    bpm: 100,
+    swing: 0.08,
+    masterVolume: 0.9,
+    songKey: "A minor",
+    updatedAt: Date.now(),
+    pads: defaultPads(),
+    tracks,
+    sections: autoSections(tracks, true),
   };
 }
 
@@ -573,18 +624,130 @@ export const pitchName = (p: number) =>
 export const isBlackKey = (p: number) =>
   [1, 3, 6, 8, 10].includes(((p % 12) + 12) % 12);
 
-/** A natural-minor pitch classes used for "snap to key" */
+export const KEY_OPTIONS = [
+  "A minor",
+  "E minor",
+  "D minor",
+  "G minor",
+  "C minor",
+  "F minor",
+  "C major",
+  "G major",
+  "D major",
+  "F major",
+  "B♭ major",
+  "E♭ major",
+] as const;
+
+/** minor keys as [root pc, mode] — major scale = 0,2,4,5,7,9,11; natural minor = 0,2,3,5,7,8,10 */
+export function keyToPitchClasses(songKey: string): number[] {
+  const modeMinor = /minor/i.test(songKey);
+  const rootName = songKey.replace(/\s*(minor|major)/i, "").replace("♯", "#").trim();
+  const canonical: Record<string, number> = {
+    C: 0, "C#": 1, D: 2, "D#": 3, E: 4, F: 5, "F#": 6, G: 7, "G#": 8, A: 9, "A#": 10, B: 11,
+    "B♭": 10, "E♭": 3,
+  };
+  const root = canonical[rootName] ?? 9;
+  const steps = modeMinor ? [0, 2, 3, 5, 7, 8, 10] : [0, 2, 4, 5, 7, 9, 11];
+  return steps.map((s) => (root + s) % 12);
+}
+
+/** A natural-minor pitch classes used for "snap to key" (legacy default) */
 export const KEY_PITCH_CLASSES = [9, 11, 0, 2, 4, 5, 7]; // A B C D E F G
 
-export function snapPitchToKey(pitch: number): number {
+export function snapPitchToKey(pitch: number, songKey = "A minor"): number {
+  const scale = keyToPitchClasses(songKey);
   const pc = ((pitch % 12) + 12) % 12;
-  if (KEY_PITCH_CLASSES.includes(pc)) return pitch;
+  if (scale.includes(pc)) return pitch;
   // snap to nearest scale tone
   for (let d = 1; d <= 2; d++) {
-    if (KEY_PITCH_CLASSES.includes((((pitch - d) % 12) + 12) % 12)) return pitch - d;
-    if (KEY_PITCH_CLASSES.includes((((pitch + d) % 12) + 12) % 12)) return pitch + d;
+    if (scale.includes((((pitch - d) % 12) + 12) % 12)) return pitch - d;
+    if (scale.includes((((pitch + d) % 12) + 12) % 12)) return pitch + d;
   }
   return pitch;
+}
+
+/** the section playing at a given bar (0..SONG_BARS-1) */
+export function sectionAtBar(sections: Section[] | undefined, bar: number): Section | null {
+  if (!sections?.length) return null;
+  return sections.find((s) => bar >= s.startBar && bar < s.endBar) ?? sections[0] ?? null;
+}
+
+/** regenerate sections for a project whose tracks were replaced */
+export function withAutoSections(p: Project): Project {
+  return { ...p, sections: autoSections(p.tracks, true) };
+}
+
+/** small glyph per track kind/name — used by the sidebar + arrange lanes */
+export function trackIcon(t: Track): string {
+  if (t.kind === "drum") {
+    if (/kick/i.test(t.name)) return "⚡";
+    if (/snare|clap/i.test(t.name)) return "◈";
+    if (/hat/i.test(t.name)) return "◇";
+    if (/tom|conga/i.test(t.name)) return "◌";
+    if (/shak|perc|rim/i.test(t.name)) return "✳";
+    if (/ride|crash/i.test(t.name)) return "✺";
+    if (/chop|vox|fx/i.test(t.name)) return "◍";
+    return "⬤";
+  }
+  if (/bass|303|acid/i.test(t.name)) return "♪";
+  if (/lead/i.test(t.name)) return "↗";
+  if (/pad/i.test(t.name)) return "∿";
+  return "♫";
+}
+
+/* ---------------- drum kit presets (tune/volume sculpting) ---------------- */
+
+export interface KitPreset {
+  name: string;
+  tag: string;
+  /** per-sound tweaks applied to matching drum tracks */
+  tweak: Partial<Record<DrumSound, { tune: number; volume?: number }>>;
+}
+
+export const KIT_PRESETS: KitPreset[] = [
+  {
+    name: "Boom Bap",
+    tag: "dusty",
+    tweak: { kick: { tune: -2, volume: 0.95 }, snare: { tune: -1, volume: 0.85 }, chat: { tune: 1, volume: 0.45 }, ohat: { tune: 0, volume: 0.4 } },
+  },
+  {
+    name: "Club Punch",
+    tag: "clean",
+    tweak: { kick: { tune: 0, volume: 1.05 }, snare: { tune: 1, volume: 0.8 }, clap: { tune: 0, volume: 0.75 }, chat: { tune: 2, volume: 0.5 } },
+  },
+  {
+    name: "Lo-Fi Tape",
+    tag: "warm",
+    tweak: { kick: { tune: -3, volume: 0.85 }, snare: { tune: -2, volume: 0.7 }, chat: { tune: -1, volume: 0.4 }, perc: { tune: -2, volume: 0.4 } },
+  },
+  {
+    name: "Techno Rack",
+    tag: "cold",
+    tweak: { kick: { tune: 1, volume: 1.1 }, rim: { tune: 2, volume: 0.5 }, chat: { tune: 3, volume: 0.55 }, ohat: { tune: 1, volume: 0.45 } },
+  },
+  {
+    name: "Jungle Chops",
+    tag: "choppy",
+    tweak: { kick: { tune: 2, volume: 0.9 }, snare: { tune: 3, volume: 0.75 }, chop: { tune: 0, volume: 0.55 }, conga: { tune: 1, volume: 0.5 } },
+  },
+  {
+    name: "Psy Floor",
+    tag: "punchy",
+    tweak: { kick: { tune: 0, volume: 1.15 }, chat: { tune: 2, volume: 0.55 }, ohat: { tune: 0, volume: 0.42 }, perc: { tune: 1, volume: 0.5 } },
+  },
+];
+
+export function applyKitPreset(project: Project, kit: KitPreset): Project {
+  return {
+    ...project,
+    tracks: project.tracks.map((t) => {
+      if (t.kind !== "drum") return t;
+      const tw = kit.tweak[t.sound];
+      if (!tw) return t;
+      return { ...t, tune: tw.tune, volume: tw.volume ?? t.volume };
+    }),
+  };
 }
 
 export function humanizeProjectVelocities(project: Project): Project {

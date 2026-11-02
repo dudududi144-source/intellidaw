@@ -4,7 +4,7 @@
 /* ------------------------------------------------------------------ */
 
 import {
-  KEY_PITCH_CLASSES,
+  keyToPitchClasses,
   STEP_COUNT,
   type Project,
 } from "./types";
@@ -37,6 +37,7 @@ export function computeStats(project: Project): ProjectStats {
   let drumCount = 0;
   let outOfKey = 0;
   const vels: number[] = [];
+  const scale = keyToPitchClasses(project.songKey);
   for (const t of project.tracks) {
     if (t.kind === "drum") {
       drumCount += t.steps.filter((s) => s.on).length;
@@ -45,7 +46,7 @@ export function computeStats(project: Project): ProjectStats {
       for (const n of t.notes) {
         vels.push(n.vel);
         const pc = ((n.pitch % 12) + 12) % 12;
-        if (!KEY_PITCH_CLASSES.includes(pc)) outOfKey++;
+        if (!scale.includes(pc)) outOfKey++;
       }
     }
   }
@@ -82,7 +83,7 @@ export function computeStats(project: Project): ProjectStats {
     loudest: loud[0]?.name ?? "—",
     quietest: loud[loud.length - 1]?.name ?? "—",
     bpm: project.bpm,
-    key: "A minor",
+    key: project.songKey,
   };
 }
 

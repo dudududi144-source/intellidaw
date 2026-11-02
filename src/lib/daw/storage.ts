@@ -2,7 +2,7 @@
 /*  Local project storage — no login, everything stays on the device   */
 /* ------------------------------------------------------------------ */
 
-import { defaultPads, type DrumStep, type DrumTrack, type Note, type Project, type SynthTrack, type Track, type Waveform } from "./types";
+import { autoSections, defaultPads, type DrumStep, type DrumTrack, type Note, type Project, type Section, type SynthTrack, type Track, type Waveform } from "./types";
 
 const KEY = "intellidaw.projects.v1";
 const CURRENT = "intellidaw.current.v1";
@@ -90,6 +90,9 @@ function sanitizeTrack(t: unknown): Track | null {
     solo: !!o.solo,
     delaySend: clamp(o.delaySend, 0, 1, 0),
     reverbSend: clamp(o.reverbSend, 0, 1, 0),
+    eqLow: clamp(o.eqLow, -12, 12, 0),
+    eqMid: clamp(o.eqMid, -12, 12, 0),
+    eqHigh: clamp(o.eqHigh, -12, 12, 0),
   };
   if (o.kind === "drum") {
     const raw = Array.isArray(o.steps) ? (o.steps as DrumStep[]) : [];
@@ -137,6 +140,26 @@ function sanitizeTrack(t: unknown): Track | null {
   return null;
 }
 
+function sanitizeSections(raw: unknown, tracks: Track[]): Section[] {
+  if (!Array.isArray(raw) || raw.length === 0) return autoSections(tracks, true);
+  const ids = new Set(tracks.map((t) => t.id));
+  const cleaned: Section[] = raw
+    .filter((s) => s && typeof s === "object" && typeof (s as Section).name === "string")
+    .map((s, i) => {
+      const sec = s as Section;
+      return {
+        id: typeof sec.id === "string" ? sec.id : `sec${i}`,
+        name: sec.name.slice(0, 18),
+        color: typeof sec.color === "string" ? sec.color : "#f2a43a",
+        startBar: clamp(sec.startBar, 0, 3, i),
+        endBar: clamp(sec.endBar, 1, 4, i + 1),
+        mutes: Array.isArray(sec.mutes) ? sec.mutes.filter((m) => ids.has(m)) : [],
+      };
+    });
+  if (!cleaned.length) return autoSections(tracks, true);
+  return cleaned;
+}
+
 /** Normalise any parsed JSON into a safe Project, or null if hopeless. */
 export function sanitizeProject(raw: unknown): Project | null {
   if (!isValidProject(raw)) return null;
@@ -149,6 +172,8 @@ export function sanitizeProject(raw: unknown): Project | null {
     bpm: Math.round(clamp(p.bpm, 60, 200, 110)),
     swing: clamp(p.swing, 0, 0.6, 0.08),
     masterVolume: clamp(p.masterVolume, 0, 1.3, 0.9),
+    songKey: typeof p.songKey === "string" && p.songKey.length <= 12 ? p.songKey : "A minor",
+    sections: sanitizeSections(p.sections, tracks),
     tracks,
     pads: Array.isArray(p.pads) && p.pads.length === 16 ? p.pads : defaultPads(),
     updatedAt: typeof p.updatedAt === "number" ? p.updatedAt : Date.now(),
