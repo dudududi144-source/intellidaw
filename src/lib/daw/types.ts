@@ -488,6 +488,45 @@ export const TEMPLATES: Template[] = [
     }),
   },
   {
+    name: "SKAZI Psy",
+    bpm: 138,
+    tag: "138",
+    build: () => ({
+      ...createDefaultProject(),
+      id: uid(),
+      name: "Skazi Psy Floor",
+      bpm: 138,
+      swing: 0,
+      tracks: [
+        makeDrumTrack("kick", "Kick", "#f2a43a", [0, 4, 8, 12]),
+        makeDrumTrack("chat", "C Hat", "#d97b5a", [2, 6, 10, 14], { volume: 0.55 }),
+        makeDrumTrack("ohat", "O Hat", "#b8a98f", [2, 6, 10, 14], { volume: 0.4 }),
+        makeDrumTrack("perc", "Perc", "#e5c15a", [7, 15], { volume: 0.45 }),
+        makeSynthTrack(
+          "Bass",
+          "#a3e635",
+          { waveform: "sawtooth", cutoff: 0.34, resonance: 8, sustain: 0.2, decay: 0.16, release: 0.08, octave: -1, volume: 0.95 },
+          [
+            note(2, 1, 45), note(6, 1, 45), note(10, 1, 45), note(14, 1, 43),
+            note(18, 1, 45), note(22, 1, 45), note(26, 1, 45), note(30, 1, 40),
+          ]
+        ),
+        makeSynthTrack(
+          "Acid",
+          "#c084fc",
+          { waveform: "sawtooth", cutoff: 0.32, resonance: 18, sustain: 0.15, decay: 0.12, release: 0.08, glide: true, delaySend: 0.4, volume: 0.42 },
+          [note(0, 1, 57), note(3, 1, 60), note(6, 1, 64), note(9, 1, 62), note(12, 1, 57), note(15, 1, 55)]
+        ),
+        makeSynthTrack(
+          "Lead",
+          "#f2a43a",
+          { waveform: "sawtooth", cutoff: 0.68, resonance: 6, decay: 0.3, sustain: 0.35, release: 0.3, detune: 22, delaySend: 0.3, reverbSend: 0.25, volume: 0.42 },
+          [note(8, 4, 76, 0.7), note(12, 2, 74, 0.6), note(14, 2, 72, 0.7)]
+        ),
+      ],
+    }),
+  },
+  {
     name: "Blank",
     bpm: 110,
     tag: "110",

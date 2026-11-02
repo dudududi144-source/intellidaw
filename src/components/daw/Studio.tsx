@@ -29,17 +29,19 @@ import { KeysTab, PianoKeyboard } from "./KeysTab";
 import { PadsTab } from "./PadsTab";
 import { MixerTab } from "./MixerTab";
 import { AssistantTabMemo } from "./AssistantTab";
+import { SkaziTab } from "./SkaziTab";
 import { ExportDialog } from "./ExportDialog";
 import { ProjectsDrawer } from "./ProjectsDrawer";
 import { Meter, TabButton } from "./ui";
 
-type Tab = "beats" | "keys" | "pads" | "mixer" | "assistant";
+type Tab = "beats" | "keys" | "pads" | "mixer" | "skazi" | "assistant";
 
 const TABS: Array<{ id: Tab; label: string; icon: string }> = [
   { id: "beats", label: "Beats", icon: "▤" },
   { id: "keys", label: "Keys", icon: "♪" },
   { id: "pads", label: "Pads", icon: "▩" },
   { id: "mixer", label: "Mixer", icon: "⇵" },
+  { id: "skazi", label: "SKAZI", icon: "✦" },
   { id: "assistant", label: "Assistant", icon: "◎" },
 ];
 
@@ -466,6 +468,9 @@ export function Studio({ onClose }: { onClose: () => void }) {
               getLevel={getLevel}
               getMasterLevel={getMasterLevel}
             />
+          )}
+          {tab === "skazi" && (
+            <SkaziTab project={project} updateProject={updateProject} />
           )}
           {tab === "assistant" && <AssistantTabMemo project={project} onApplyFix={applyFix} />}
         </div>

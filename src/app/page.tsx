@@ -5,6 +5,7 @@ import { Nav } from "@/components/landing/Nav";
 import { Hero } from "@/components/landing/Hero";
 import { Features, Stats } from "@/components/landing/Features";
 import { Instruments, SamplerKits } from "@/components/landing/Instruments";
+import { SkaziBundle } from "@/components/landing/SkaziBundle";
 import { Assistant, Mixing, Perform } from "@/components/landing/Showcase";
 import { Details, HowItWorks } from "@/components/landing/Details";
 import { Faq, FinalCta, Footer } from "@/components/landing/Faq";
@@ -40,6 +41,7 @@ export default function Home() {
         <Features />
         <Instruments />
         <SamplerKits />
+        <SkaziBundle onOpenStudio={openStudio} />
         <Assistant />
         <Mixing />
         <Perform />

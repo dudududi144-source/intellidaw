@@ -4,7 +4,10 @@
 /*  offline WAV rendering.                                             */
 /* ------------------------------------------------------------------ */
 
-import type { DrumSound, Project, SynthTrack, Waveform } from "./types";
+import type { DrumSound, Note, Project, SynthTrack, Waveform } from "./types";
+import { getSkaziChainFor, refreshSkaziChain, type SkaziChain } from "./skaziAudio";
+import { scheduleSkaziVoice, acidNote, bambaRiser, type VoiceParams } from "./skaziAudio";
+import { skaziStore } from "./skazi";
 
 const LOOKAHEAD_S = 0.14;
 const TICK_MS = 30;
@@ -398,11 +401,17 @@ function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Gra
   master.connect(limiter);
 
   let tail: AudioNode = limiter;
+  const chain: SkaziChain | null = getSkaziChainOrNull(ctx);
+  if (chain) {
+    limiter.connect(chain.input);
+    chain.apply(currentSkaziStateSnapshot(), project.bpm);
+    tail = chain.output;
+  }
   if (live) {
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 512;
-    limiter.connect(analyser);
-    tail = limiter;
+    tail.connect(analyser);
+    tail = analyser;
     (graphExtras as { masterAnalyser?: AnalyserNode }).masterAnalyser = analyser;
   }
   tail.connect(ctx.destination);
@@ -463,6 +472,25 @@ function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Gra
 
 const graphExtras: { masterAnalyser?: AnalyserNode } = {};
 
+/* ---------------- SKAZI chain plumbing ---------------- */
+
+function getSkaziChainOrNull(ctx: BaseAudioContext): SkaziChain | null {
+  try {
+    if (typeof window === "undefined") return null;
+    return getSkaziChainFor(ctx);
+  } catch {
+    return null;
+  }
+}
+
+function currentSkaziStateSnapshot() {
+  try {
+    return skaziStore.get();
+  } catch {
+    return { instruments: {}, fx: {}, seq: {}, godSeed: 1 };
+  }
+}
+
 /* ---------------- engine ---------------- */
 
 export class DawEngine {
@@ -494,6 +522,7 @@ export class DawEngine {
   async sync(project: Project) {
     this.project = project;
     const ctx = await this.ensure();
+    refreshSkaziChain(project.bpm);
     if (!this.graph) {
       this.graph = buildGraph(ctx, project, true);
     } else {
@@ -636,6 +665,80 @@ export class DawEngine {
   async previewSynth(p: SynthParams, pitch: number, durSec = 0.35, vel = 0.9) {
     const ctx = await this.ensure();
     scheduleSynth(ctx, ctx.destination, p, pitch, vel, ctx.currentTime + 0.01, durSec);
+  }
+
+  /* ---- SKAZI bundle previews (routed through the master FX chain) ---- */
+
+  private async skaziDest(): Promise<AudioNode> {
+    const ctx = await this.ensure();
+    const chain = getSkaziChainOrNull(ctx);
+    if (chain) {
+      const bpm = this.project?.bpm ?? 120;
+      chain.apply(skaziStore.get(), bpm);
+      return chain.input;
+    }
+    return ctx.destination;
+  }
+
+  async previewSkazi(deviceId: string, pitch: number, durSec = 0.5, vel = 0.9) {
+    const ctx = await this.ensure();
+    const dest = await this.skaziDest();
+    const params = (skaziStore.get().instruments[deviceId] ?? {}) as VoiceParams;
+    scheduleSkaziVoice(ctx, dest, deviceId, params, pitch, ctx.currentTime + 0.01, durSec, vel);
+  }
+
+  /** audition a MIDI GOD pattern (synth roles) or drum steps */
+  async previewPattern(deviceId: string, notes: Note[], bars: number, drumSteps?: boolean[]): Promise<number> {
+    const ctx = await this.ensure();
+    const dest = await this.skaziDest();
+    const stepDur = 60 / this.bpm() / 4;
+    const t0 = ctx.currentTime + 0.06;
+    const params = (skaziStore.get().instruments[deviceId] ?? {}) as VoiceParams;
+    if (notes.length) {
+      for (const n of notes) {
+        scheduleSkaziVoice(ctx, dest, deviceId, params, n.pitch, t0 + n.step * stepDur, Math.max(1, n.len) * stepDur, n.vel);
+      }
+    }
+    if (drumSteps?.length) {
+      for (let i = 0; i < drumSteps.length; i++) {
+        if (!drumSteps[i]) continue;
+        scheduleDrum(ctx, dest, i % 16 === 14 ? "snare" : "kick", t0 + (i % 16) * stepDur + Math.floor(i / 16) * 16 * stepDur, { vel: 0.9, tune: 0 });
+      }
+    }
+    return bars * 16 * stepDur;
+  }
+
+  async previewSkaziSeqNote(deviceId: "tbon303" | "skacid", pitch: number, accent = false, slideFrom: number | null = null) {
+    const ctx = await this.ensure();
+    const dest = await this.skaziDest();
+    const params = (skaziStore.get().instruments[deviceId] ?? {}) as VoiceParams;
+    acidNote(ctx, dest, params, pitch, 0.95, accent, slideFrom, ctx.currentTime + 0.01, 0.22);
+  }
+
+  async fireRiser() {
+    const ctx = await this.ensure();
+    const dest = await this.skaziDest();
+    const params = (skaziStore.get().instruments["bamba"] ?? {}) as VoiceParams;
+    bambaRiser(ctx, dest, params, this.project?.bpm ?? 120, ctx.currentTime + 0.02);
+  }
+
+  async skaziSequencerCtx(): Promise<{ ctx: AudioContext; dest: AudioNode }> {
+    const ctx = await this.ensure();
+    const dest = await this.skaziDest();
+    return { ctx, dest };
+  }
+
+  bpm(): number {
+    return this.project?.bpm ?? 120;
+  }
+
+  /** sync accessor for the SKAZI sequencer routing (null until audio unlocked) */
+  skaziChainInputSync(): AudioNode | null {
+    if (!this.ctx) return null;
+    const chain = getSkaziChainOrNull(this.ctx);
+    if (!chain) return null;
+    chain.apply(skaziStore.get(), this.bpm());
+    return chain.input;
   }
 
   async decodeDataUrl(dataUrl: string): Promise<AudioBuffer | null> {
