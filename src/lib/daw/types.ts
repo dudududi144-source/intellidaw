@@ -435,6 +435,30 @@ export function createDefaultProject(): Project {
   };
 }
 
+/** An empty studio — the intellidaw entrance: no tracks yet, just transport
+ *  defaults and the "Start with an Instrument" drawer. The genre templates
+ *  keep building on createDefaultProject; this is only for blank canvases. */
+export function createEmptyProject(name = "Untitled Project"): Project {
+  return {
+    id: uid(),
+    name,
+    bpm: 120,
+    swing: 0.08,
+    masterVolume: 0.9,
+    songKey: "A minor",
+    updatedAt: Date.now(),
+    pads: defaultPads(),
+    tracks: [],
+    sections: autoSections([]),
+    loopOn: false,
+    loopStart: 0,
+    loopEnd: SONG_BARS,
+    countIn: false,
+    markers: [],
+    liveFx: defaultLiveFx(),
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /*  Genre templates                                                    */
 /* ------------------------------------------------------------------ */

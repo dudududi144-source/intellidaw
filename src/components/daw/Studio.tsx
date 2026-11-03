@@ -20,7 +20,7 @@ import {
   KEY_OPTIONS,
   SONG_BARS,
   TEMPLATES,
-  createDefaultProject,
+  createEmptyProject,
   humanizeProjectVelocities,
   makeDrumTrack,
   makeSynthTrack,
@@ -34,7 +34,7 @@ import {
 } from "@/lib/daw/types";
 import { getEngine } from "@/lib/daw/engine";
 import { loadCurrent, sanitizeProject, saveCurrent, saveProject } from "@/lib/daw/storage";
-import { peekDeviceSelect } from "@/lib/daw/skazi";
+import { peekDeviceSelect, requestDeviceSelect } from "@/lib/daw/skazi";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -63,6 +63,13 @@ import { Visualizer } from "./Visualizer";
 import { PerfKeyboard } from "./PerfKeyboard";
 import { ExportDialog } from "./ExportDialog";
 import { ProjectsDrawer } from "./ProjectsDrawer";
+import {
+  DRUM_LANES,
+  InstrumentDrawer,
+  SYNTH_PATCHES,
+  type DrawerAction,
+  type SynthPatchId,
+} from "./InstrumentDrawer";
 import { Meter } from "./ui";
 
 type View =
@@ -149,14 +156,27 @@ const VIEWS: Array<{ id: View; label: string; icon: string; hint: string }> = [
 
 const TRACK_COLORS = ["#f2a43a", "#e5c15a", "#d97b5a", "#8fbf6b", "#c084fc", "#b8a98f", "#6bc5b8", "#e5533d"];
 
+/* SKAZI device id → the track name it lands as (fallback "SKAZI") */
+const SKAZI_DEVICE_NAMES: Record<string, string> = {
+  bully: "BULLY",
+  kube: "KUBE",
+  tbon303: "TBON 303",
+  skacid: "SKACID",
+};
+
+const patchFor = (id: SynthPatchId) => SYNTH_PATCHES.find((p) => p.id === id);
+
 const PAD_KEY_INDEX: Record<string, number> = {};
 "1234567890qwerty".split("").forEach((k, i) => (PAD_KEY_INDEX[k] = i));
 
 export function Studio({ onClose }: { onClose: () => void }) {
   const { toast } = useToast();
-  const [project, setProject] = useState<Project | null>(() =>
-    typeof window !== "undefined" ? loadCurrent() ?? createDefaultProject() : null
+  /* the initial project is computed once — it seeds the live state AND
+     decides whether the studio opens on the empty entrance */
+  const [initialProject] = useState<Project | null>(() =>
+    typeof window !== "undefined" ? loadCurrent() ?? createEmptyProject() : null
   );
+  const [project, setProject] = useState<Project | null>(initialProject);
   const [view, setView] = useState<View>(() => (peekDeviceSelect() ? "skazi" : "arrange"));
   const [playing, setPlaying] = useState(false);
   const [currentStep, setCurrentStep] = useState(-1); // absolute step, -1 stopped
@@ -165,6 +185,10 @@ export function Studio({ onClose }: { onClose: () => void }) {
   const [flashSlot, setFlashSlot] = useState<number | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(false);
+  /* intellidaw entrance: a project born empty (no saved session, or a fresh
+     "New project") starts with the instrument drawer open */
+  const [drawerOpen, setDrawerOpen] = useState(() => (initialProject?.tracks.length ?? 1) === 0);
+  const [deviceJump, setDeviceJump] = useState(0);
   const [started, setStarted] = useState(false);
   const [metro, setMetro] = useState(false);
   const [fxOpen, setFxOpen] = useState(false);
@@ -532,6 +556,63 @@ export function Studio({ onClose }: { onClose: () => void }) {
     [updateProject]
   );
 
+  /* ---------------- instrument drawer actions ----------------
+     the drawer auditions sounds itself — creating the track is our only job.
+     drum/patch keep the drawer open so more instruments can be added;
+     skazi/pads close it because they are destinations of their own. */
+  const handleDrawerAction = useCallback(
+    (a: DrawerAction) => {
+      const p = projectRef.current;
+      if (!p) return;
+      const color = TRACK_COLORS[p.tracks.length % TRACK_COLORS.length];
+
+      if (a.type === "drum") {
+        const lane = DRUM_LANES.find((l) => l.sound === a.sound);
+        if (!lane) return;
+        const n = p.tracks.filter((t) => t.kind === "drum" && t.name === lane.name).length;
+        const t = makeDrumTrack(
+          a.sound,
+          n > 0 ? `${lane.name} ${n + 1}` : lane.name,
+          color,
+          lane.beats,
+          a.sound === "chat" || a.sound === "shaker" ? { volume: 0.6 } : {}
+        );
+        updateProject((prev) => ({ ...prev, tracks: [...prev.tracks, t] }));
+        setSelTrack(t.id);
+        setView("editor");
+      } else if (a.type === "patch") {
+        const patch = patchFor(a.patch);
+        if (!patch) return;
+        const n = p.tracks.filter((t) => t.kind === "synth" && t.name === patch.name).length;
+        const t = makeSynthTrack(n > 0 ? `${patch.name} ${n + 1}` : patch.name, color, {
+          ...patch.opts,
+        });
+        updateProject((prev) => ({ ...prev, tracks: [...prev.tracks, t] }));
+        setSelTrack(t.id);
+        setView("editor");
+      } else if (a.type === "skazi") {
+        const display = SKAZI_DEVICE_NAMES[a.deviceId] ?? "SKAZI";
+        const t = makeSynthTrack(display, color, {});
+        updateProject((prev) => ({ ...prev, tracks: [...prev.tracks, t] }));
+        setSelTrack(t.id);
+        requestDeviceSelect(a.deviceId);
+        setDeviceJump((c) => c + 1);
+        setView("skazi");
+        setDrawerOpen(false);
+        toast({
+          title: `${display} added — tweak it in the SKAZI rack`,
+          description: "Pick presets, morph the sound and drop patterns straight onto tracks.",
+        });
+      } else {
+        /* pads */
+        setView("pads");
+        setDrawerOpen(false);
+        toast({ title: "Pads", description: "Tap a slot to load your own WAV / MP3." });
+      }
+    },
+    [updateProject, toast]
+  );
+
   const deleteTrack = useCallback(
     (id: string) => {
       updateProject((p) => ({
@@ -648,18 +729,85 @@ export function Studio({ onClose }: { onClose: () => void }) {
   const activeView = VIEWS.find((v) => v.id === view)!;
   const sections = project.sections ?? [];
 
+  /* the entrance — suggested first instruments while the song is empty
+     (mirrors the original: fix the rhythm section, then the headline gear) */
+  const hasDrum = project.tracks.some((t) => t.kind === "drum");
+  const hasBass = project.tracks.some(
+    (t) => t.kind === "synth" && (t.bus === "bass" || /bass|sub|303|acid|reese/i.test(t.name))
+  );
+  const suggestions: Array<{ icon: string; title: string; sub: string; isNew?: boolean; action: DrawerAction }> = [];
+  if (!hasDrum) suggestions.push({ icon: "⚡", title: "Kick", sub: "No drums yet", action: { type: "drum", sound: "kick" } });
+  if (!hasBass) suggestions.push({ icon: "♪", title: "Bass", sub: "No bass yet", action: { type: "patch", patch: "bass" } });
+  suggestions.push(
+    { icon: "✧", title: "BULLY", sub: "Wavetable bass & leads", isNew: true, action: { type: "skazi", deviceId: "bully" } },
+    { icon: "✧", title: "KUBE", sub: "Morphing wavetable synth", isNew: true, action: { type: "skazi", deviceId: "kube" } }
+  );
+  if (suggestions.length < 4) suggestions.push({ icon: "♪", title: "TBON 303", sub: "303-style bass line", action: { type: "skazi", deviceId: "tbon303" } });
+  if (suggestions.length < 4) suggestions.push({ icon: "▩", title: "Pads", sub: "16 pads + grooves", action: { type: "pads" } });
+
   const viewContent = (
     <>
       {view === "arrange" && (
-        <Timeline
-          project={project}
-          currentStep={currentStep}
-          playing={playing}
-          selectedId={effSel}
-          onSelect={selectFromTimeline}
-          onSeek={seek}
-          updateProject={updateProject}
-        />
+        <div className="flex flex-col gap-3">
+          {project.tracks.length === 0 && (
+            <div className="mx-auto w-full max-w-md rounded-2xl border border-white/10 bg-[#100d0b]/80 p-6 text-center shadow-2xl">
+              <button
+                onClick={() => setDrawerOpen(true)}
+                className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[#f2a43a] text-2xl font-bold text-black transition-transform hover:scale-110"
+                title="Open the instrument drawer"
+                aria-label="Add your first track"
+              >
+                +
+              </button>
+              <div className="mt-3 text-lg font-bold text-[#f0ece4]">Start with an Instrument</div>
+              <p className="mx-auto mt-1 max-w-xs text-[13px] leading-relaxed text-[#a89f91]">
+                Pick a sound for your first track. You can add more, or swap the instrument, at any time.
+              </p>
+              <div className="mt-4 grid grid-cols-2 gap-2 text-left">
+                {suggestions.map((s) => (
+                  <button
+                    key={s.title}
+                    onClick={() => handleDrawerAction(s.action)}
+                    className="flex items-start gap-2 rounded-xl border border-white/10 bg-white/[0.03] p-2.5 transition-colors hover:bg-white/[0.08]"
+                  >
+                    <span
+                      aria-hidden
+                      className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded bg-[#f2a43a]/15 text-[11px] text-[#f2a43a]"
+                    >
+                      {s.icon}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-1.5 text-[12px] font-semibold text-[#f0ece4]">
+                        {s.title}
+                        {s.isNew && (
+                          <span className="rounded bg-[#f2a43a] px-1 font-mono text-[8px] font-bold uppercase text-[#17120a]">
+                            New
+                          </span>
+                        )}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] leading-snug text-[#a89f91]">{s.sub}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => setDrawerOpen(true)}
+                className="mt-3 font-mono text-[11px] uppercase tracking-wider text-[#f2a43a] hover:underline"
+              >
+                All instruments →
+              </button>
+            </div>
+          )}
+          <Timeline
+            project={project}
+            currentStep={currentStep}
+            playing={playing}
+            selectedId={effSel}
+            onSelect={selectFromTimeline}
+            onSeek={seek}
+            updateProject={updateProject}
+          />
+        </div>
       )}
       {view === "editor" && (
         <EditorPanel
@@ -695,7 +843,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
         <HistoryTab project={project} updateProject={updateProject} past={histSnap.past} future={histSnap.future} onRestore={restoreState} />
       )}
       {view === "learn" && <LearnTab project={project} updateProject={updateProject} onApplyFix={applyFix} />}
-      {view === "skazi" && <SkaziTab project={project} updateProject={updateProject} />}
+      {view === "skazi" && <SkaziTab key={deviceJump} project={project} updateProject={updateProject} />}
       {view === "assistant" && <AssistantTabMemo project={project} onApplyFix={applyFix} />}
     </>
   );
@@ -736,6 +884,26 @@ export function Studio({ onClose }: { onClose: () => void }) {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent className="border-white/10 bg-[#171310] text-[#f0ece4]">
+            <DropdownMenuItem
+              onClick={() => {
+                const p = createEmptyProject();
+                getEngine().stop();
+                setPlaying(false);
+                setCurrentStep(-1);
+                past.current = [];
+                future.current = [];
+                setProject(p);
+                setSelTrack(null);
+                setView("arrange");
+                setDrawerOpen(true);
+                toast({ title: "New project", description: "Blank canvas — pick an instrument to start." });
+              }}
+              className="gap-3 focus:bg-white/5"
+            >
+              <span className="w-20 font-semibold text-[#f2a43a]">＋ New</span>
+              <span className="font-mono text-[10px] text-[#a89f91]">empty studio</span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator className="bg-white/10" />
             <DropdownMenuLabel className="font-mono text-[10px] uppercase tracking-wider text-[#a89f91]">
               Start from a groove
             </DropdownMenuLabel>
@@ -1155,7 +1323,25 @@ export function Studio({ onClose }: { onClose: () => void }) {
       <div className="flex min-h-0 flex-1">
         {/* -------- left rail: tracks + song -------- */}
         <aside className="hidden w-56 shrink-0 flex-col border-r border-white/8 bg-[#0d0a08] md:flex">
-          <div className="flex items-center justify-between px-3 pb-1 pt-2.5">
+          <div className="px-2.5 pb-1.5 pt-2.5">
+            <div className="flex gap-1.5">
+              <button
+                onClick={() => setDrawerOpen(true)}
+                className="flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-lg bg-[#f2a43a] font-mono text-[11px] font-bold text-[#17120a] transition-colors hover:bg-[#ffb75c]"
+                title="Open the instrument drawer"
+              >
+                + Add track
+              </button>
+              <button
+                onClick={() => setView("pads")}
+                className="flex h-7 shrink-0 items-center justify-center rounded-lg border border-white/8 bg-white/5 px-2 font-mono text-[11px] text-[#a89f91] hover:bg-white/12 hover:text-[#f0ece4]"
+                title="Import audio — load your own WAV / MP3 onto the pads"
+              >
+                ↥ Import
+              </button>
+            </div>
+          </div>
+          <div className="flex items-center justify-between px-3 pb-1">
             <span className="font-mono text-[9px] uppercase tracking-widest text-[#a89f91]">
               Tracks · {project.tracks.length}
             </span>
@@ -1512,6 +1698,14 @@ export function Studio({ onClose }: { onClose: () => void }) {
           saveProject(copy);
           toast({ title: "Copy saved", description: copy.name });
         }}
+      />
+
+      {/* instrument drawer — the intellidaw entrance */}
+      <InstrumentDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        tracks={project.tracks}
+        onAction={handleDrawerAction}
       />
     </div>
   );
