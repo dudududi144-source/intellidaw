@@ -311,6 +311,12 @@ export function Studio({ onClose }: { onClose: () => void }) {
     (window as unknown as { __intellidaw?: unknown }).__intellidaw = {
       getEngine,
       getProject: () => projectRef.current,
+      /* full-song offline render → 16-bit PCM WAV blob (measurable QA) */
+      renderWav: (bars?: number) => {
+        const p = projectRef.current;
+        if (!p) return Promise.reject(new Error("no project"));
+        return getEngine().renderWav(p, bars ?? 4);
+      },
     };
   }, []);
 

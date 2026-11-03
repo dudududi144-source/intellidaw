@@ -93,7 +93,12 @@ export function SkaziBundle({ onOpenStudio }: { onOpenStudio: () => void }) {
           sub={`Every device ships with presets, RANDOM, A/B compare and undo — the official bundle's own promise, now running in your browser. 19 free tools by Asher Swissa + FM-1, Limonana, Sabich and Malabi by Intellidaw · ${bankTotal().toLocaleString()} presets · 0 ₪. No install, no account.`}
         />
         <button
-          onClick={onOpenStudio}
+          onClick={() => {
+            /* the button promises the SKAZI rack → land there with the
+               SKAZI synth selected, same as every "Try it" card */
+            requestDeviceSelect("skazi");
+            onOpenStudio();
+          }}
           className="flex items-center justify-center gap-2 rounded-xl bg-[#f2a43a] px-5 py-3 font-semibold text-[#17120a] transition-colors hover:bg-[#ffb75c]"
         >
           <Sparkles className="h-4 w-4" aria-hidden />
