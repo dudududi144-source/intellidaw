@@ -64,8 +64,8 @@ function AssistantMock() {
 export function Assistant() {
   return (
     <Section id="assistant">
-      <div className="grid items-center gap-10 lg:grid-cols-2">
-        <div>
+      <div className="grid min-w-0 items-center gap-10 lg:grid-cols-2">
+        <div className="min-w-0">
           <SectionHead
             kicker="Studio assistant"
             title="A second pair of ears that reads your whole song"
@@ -83,7 +83,9 @@ export function Assistant() {
             ))}
           </div>
         </div>
-        <AssistantMock />
+        <div className="min-w-0">
+          <AssistantMock />
+        </div>
       </div>
     </Section>
   );
@@ -149,8 +151,8 @@ function MixerMock() {
 export function Mixing() {
   return (
     <Section id="mixing">
-      <div className="grid items-center gap-10 lg:grid-cols-2">
-        <div className="order-2 lg:order-1">
+      <div className="grid min-w-0 items-center gap-10 lg:grid-cols-2">
+        <div className="order-2 min-w-0 lg:order-1">
           <SectionHead
             kicker="Mix & master"
             title="A real mixer, effects that chain, and a master that hits loud"
@@ -162,7 +164,7 @@ export function Mixing() {
             <Bullet icon={Timer} title="Automation" text="Draw filter sweeps and level rides across bars." />
           </div>
         </div>
-        <div className="order-1 lg:order-2">
+        <div className="order-1 min-w-0 lg:order-2">
           <MixerMock />
         </div>
       </div>
@@ -247,8 +249,8 @@ function SessionMock() {
 export function Perform() {
   return (
     <Section id="perform">
-      <div className="grid items-center gap-10 lg:grid-cols-2">
-        <div>
+      <div className="grid min-w-0 items-center gap-10 lg:grid-cols-2">
+        <div className="min-w-0">
           <SectionHead
             kicker="Perform live"
             title="Launch clips, play keys, throw effects"
@@ -261,7 +263,9 @@ export function Perform() {
             <Bullet icon={Waves} title="Live FX strip" text="Filter, crush, comb, tape and echo over the whole mix." />
           </div>
         </div>
-        <SessionMock />
+        <div className="min-w-0">
+          <SessionMock />
+        </div>
       </div>
     </Section>
   );

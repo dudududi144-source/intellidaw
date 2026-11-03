@@ -32,7 +32,7 @@ function DeviceCard({ d, onTry }: { d: SkaziDevice; onTry: (id: string) => void 
   const feats = (d.features ?? d.params.map((p) => p.label)).slice(0, 3);
 
   return (
-    <Card className="flex flex-col gap-3 p-4 sm:p-5">
+    <Card className="flex min-w-0 flex-col gap-3 p-4 sm:p-5">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: d.accent }} aria-hidden />
         <h3 className="font-mono text-[15px] font-bold tracking-wide text-[#f0ece4]">{d.name}</h3>
