@@ -265,10 +265,17 @@ export function Studio({ onClose }: { onClose: () => void }) {
 
   const playPadSlot = useCallback((slot: number) => void playPad(slot), [playPad]);
 
-  const previewNote = useCallback(async (track: SynthTrack, pitch: number) => {
-    setStarted(true);
-    await getEngine().previewSynth(track, pitch, 0.45, 0.9);
-  }, []);
+  const previewNote = useCallback(
+    async (track: SynthTrack, pitch: number) => {
+      setStarted(true);
+      // audition at the drawn note length (and current tempo) so what you
+      // hear matches what will land in the roll
+      const bpm = projectRef.current?.bpm ?? 100;
+      const dur = Math.max(0.3, (drawLen * (60 / bpm)) / 4);
+      await getEngine().previewSynth(track, pitch, dur, 0.9);
+    },
+    [drawLen]
+  );
 
   /* master FX (live filter / drive) */
   const applyFxFilter = useCallback((v: number) => {
