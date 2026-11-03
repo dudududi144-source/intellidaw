@@ -766,8 +766,10 @@ export function SkaziTab({
     !q || d.name.toLowerCase().includes(q) || d.tagline.toLowerCase().includes(q) || d.folder.toLowerCase().includes(q);
   const favIds = (state.favorites ?? []).filter((id) => deviceById(id) && matches(deviceById(id)!));
   const isFav = (state.favorites ?? []).includes(device.id);
-  const bundleCount = SKAZI_DEVICES.filter((d) => !isExtraDevice(d)).length;
-  const extrasCount = SKAZI_DEVICES.length - bundleCount;
+  /* honest split: official bundle tools have an upstream repoPath (19);
+     the rest are Intellidaw originals (FM-1, Limonana, Sabich, Malabi) */
+  const bundleCount = SKAZI_DEVICES.filter((d) => d.repoPath).length;
+  const originalsCount = SKAZI_DEVICES.length - bundleCount;
 
   const DeviceRow = ({ d }: { d: SkaziDevice }) => (
     <li>
@@ -804,7 +806,7 @@ export function SkaziTab({
               SKAZI Bundle
             </div>
             <div className="text-[11px] text-[#a89f91]">
-              {bundleCount} devices + {extrasCount} extras
+              {bundleCount} free tools + {originalsCount} originals
             </div>
           </div>
         </div>
@@ -886,7 +888,8 @@ export function SkaziTab({
 
         <p className="mt-3 border-t border-white/5 pt-2 font-mono text-[9px] leading-relaxed text-[#a89f91]/70">
           All {bundleCount} free tools by Asher Swissa (SKAZI), rebuilt as browser-native devices —
-          plus {extrasCount} Intellidaw originals. Original code, no downloads needed.
+          plus {originalsCount} Intellidaw originals (FM-1, Limonana, Sabich, Malabi). Original
+          code, no downloads needed.
         </p>
       </aside>
 

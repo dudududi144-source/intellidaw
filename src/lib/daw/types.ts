@@ -192,6 +192,8 @@ export interface Project {
   markers: Marker[];
   liveFx: LiveFxState;
   updatedAt: number;
+  /** optional display genre for the projects home (e.g. "Synthwave") */
+  genre?: string;
 }
 
 export const STEP_COUNT = 16;

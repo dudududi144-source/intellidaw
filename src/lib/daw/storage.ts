@@ -43,7 +43,9 @@ export function saveProject(project: Project): StoredProject[] {
   const entry: StoredProject = {
     id: project.id,
     name: project.name,
-    updatedAt: Date.now(),
+    /* honour the project's own timestamp so seeded/staggered "edited X ago"
+       survives; saveNow always stamps Date.now() before calling this */
+    updatedAt: project.updatedAt || Date.now(),
     project,
   };
   list.push(entry);
@@ -222,6 +224,10 @@ export function sanitizeProject(raw: unknown): Project | null {
     markers: sanitizeMarkers(p.markers),
     liveFx: sanitizeLiveFx((p as { liveFx?: unknown }).liveFx),
     updatedAt: typeof p.updatedAt === "number" ? p.updatedAt : Date.now(),
+    genre:
+      typeof (p as { genre?: unknown }).genre === "string"
+        ? ((p as { genre: string }).genre.slice(0, 24) || undefined)
+        : undefined,
   };
 }
 

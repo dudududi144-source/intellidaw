@@ -89,8 +89,8 @@ export function SkaziBundle({ onOpenStudio }: { onOpenStudio: () => void }) {
       <div className="flex flex-wrap items-end justify-between gap-6">
         <SectionHead
           kicker="SKAZI Bundle · included"
-          title={`All ${SKAZI_DEVICES.length} SKAZI devices, built right in`}
-          sub={`Every device ships with presets, RANDOM, A/B compare and undo — the official bundle's own promise, now running in your browser. ${SKAZI_DEVICES.length} devices · ${bankTotal().toLocaleString()} presets · 0 ₪. No install, no account.`}
+          title={`All ${SKAZI_DEVICES.length} devices: 19 SKAZI tools + 4 originals`}
+          sub={`Every device ships with presets, RANDOM, A/B compare and undo — the official bundle's own promise, now running in your browser. 19 free tools by Asher Swissa + FM-1, Limonana, Sabich and Malabi by Intellidaw · ${bankTotal().toLocaleString()} presets · 0 ₪. No install, no account.`}
         />
         <button
           onClick={onOpenStudio}

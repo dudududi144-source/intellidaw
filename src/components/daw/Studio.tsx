@@ -63,6 +63,7 @@ import { Visualizer } from "./Visualizer";
 import { PerfKeyboard } from "./PerfKeyboard";
 import { ExportDialog } from "./ExportDialog";
 import { ProjectsDrawer } from "./ProjectsDrawer";
+import { ProjectsHome } from "./ProjectsHome";
 import {
   DRUM_LANES,
   InstrumentDrawer,
@@ -144,7 +145,7 @@ const VIEWS: Array<{ id: View; label: string; icon: string; hint: string }> = [
     id: "skazi",
     label: "SKAZI",
     icon: "✧",
-    hint: "20 bundle devices + 3 originals — pick one, tweak it, browse its presets, drop patterns onto tracks",
+    hint: "19 free SKAZI tools + 4 originals — pick one, tweak it, browse its presets, drop patterns onto tracks",
   },
   {
     id: "assistant",
@@ -185,6 +186,10 @@ export function Studio({ onClose }: { onClose: () => void }) {
   const [flashSlot, setFlashSlot] = useState<number | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(false);
+  /* the studio opens on the "Your Projects" home — exactly like the
+     original entrance with the New Project box + project grid.
+     Landing "try this device" flows skip straight to the SKAZI rack. */
+  const [entrance, setEntrance] = useState(() => !peekDeviceSelect());
   /* intellidaw entrance: a project born empty (no saved session, or a fresh
      "New project") starts with the instrument drawer open */
   const [drawerOpen, setDrawerOpen] = useState(() => (initialProject?.tracks.length ?? 1) === 0);
@@ -423,6 +428,11 @@ export function Studio({ onClose }: { onClose: () => void }) {
       const target = ev.target as HTMLElement;
       if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
       const k = ev.key.toLowerCase();
+      /* the projects home only listens for Esc (close the studio) */
+      if (entrance) {
+        if (k === "escape") onClose();
+        return;
+      }
       if ((ev.ctrlKey || ev.metaKey) && k === "z") {
         ev.preventDefault();
         if (ev.shiftKey) redo();
@@ -474,7 +484,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [view, togglePlay, toggleMetro, playPad, undo, redo, exportOpen, projectsOpen, deviceSheet, visOpen, keysOpen, onClose]);
+  }, [view, togglePlay, toggleMetro, playPad, undo, redo, exportOpen, projectsOpen, deviceSheet, visOpen, keysOpen, entrance, onClose]);
 
   /* ---------------- assistant fixes ---------------- */
   const applyFix = useCallback(
@@ -535,6 +545,8 @@ export function Studio({ onClose }: { onClose: () => void }) {
     future.current = [];
     setProject(p);
     setSelTrack(p.tracks[0]?.id ?? null);
+    /* a loaded project already has its tracks — no need for the drawer */
+    if (p.tracks.length > 0) setDrawerOpen(false);
     toast({ title: "Project loaded", description: p.name });
   };
 
@@ -712,6 +724,35 @@ export function Studio({ onClose }: { onClose: () => void }) {
           <span className="h-2 w-2 animate-pulse rounded-full bg-[#f2a43a]" />
           Opening the studio…
         </div>
+      </div>
+    );
+  }
+
+  /* ---------------- projects home (the entrance) ---------------- */
+  const openFromHome = (p: Project) => {
+    loadProject(p);
+    setEntrance(false);
+  };
+  const newFromHome = () => {
+    getEngine().stop();
+    setPlaying(false);
+    setCurrentStep(-1);
+    past.current = [];
+    future.current = [];
+    setProject(createEmptyProject());
+    setSelTrack(null);
+    setDrawerOpen(true);
+    setEntrance(false);
+  };
+  const enterAt = (v: "sounds" | "skazi" | "learn") => {
+    setView(v);
+    setEntrance(false);
+  };
+
+  if (entrance) {
+    return (
+      <div className="fixed inset-0 z-50 bg-[#0d0a08] text-[#f0ece4]">
+        <ProjectsHome onOpen={openFromHome} onNew={newFromHome} onEnter={enterAt} />
       </div>
     );
   }
@@ -1041,8 +1082,14 @@ export function Studio({ onClose }: { onClose: () => void }) {
           <Button
             size="sm"
             variant="outline"
-            onClick={() => setProjectsOpen(true)}
-            className="hidden border-white/10 bg-transparent text-[12px] text-[#a89f91] hover:bg-white/5 hover:text-[#f0ece4] sm:block"
+            onClick={() => {
+              getEngine().stop();
+              setPlaying(false);
+              setCurrentStep(-1);
+              saveCurrent(project);
+              setEntrance(true);
+            }}
+            className="border-white/10 bg-transparent text-[12px] text-[#a89f91] hover:bg-white/5 hover:text-[#f0ece4]"
           >
             Projects
           </Button>
