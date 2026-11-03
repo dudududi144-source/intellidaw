@@ -2,18 +2,24 @@
 /*  Shared cached noise + impulse buffers.                             */
 /*  Scheduling voices must NEVER allocate AudioBuffers on the fly —    */
 /*  every `new AudioBuffer` + Math.random fill hammers the GC and      */
-/*  causes audible dropouts on busy patterns. We keep exactly one      */
-/*  buffer per (context, standard size) and reuse it everywhere.       */
+/*  causes audible dropouts on busy patterns. We keep a tiny pool of   */
+/*  variants per (context, standard size) and reuse them everywhere.   */
 /* ------------------------------------------------------------------ */
 
-type NoiseCache = Map<number, AudioBuffer>;
+type NoiseCache = Map<number, AudioBuffer[]>;
 
 const noiseCaches = new WeakMap<BaseAudioContext, NoiseCache>();
 
 /** standard sizes (seconds) the cache rounds to — bounds total memory */
 const NOISE_SECS = [0.012, 0.02, 0.05, 0.12, 0.15, 0.2, 0.3, 0.5, 1.2, 2] as const;
 
-/** a reusable white-noise buffer (rounded to the nearest standard size) */
+/** variants per size: every hit draws a different buffer, so 16th-note
+    hats/snare rolls never repeat the exact same waveform (machine-gun
+    effect is a classic "cheap sampler" tell) */
+const VARIANTS = 3;
+
+/** a reusable white-noise buffer (rounded to the nearest standard size),
+    drawn from a small pool of pre-generated variants */
 export function cachedNoise(ctx: BaseAudioContext, seconds: number): AudioBuffer {
   let m = noiseCaches.get(ctx);
   if (!m) {
@@ -24,14 +30,19 @@ export function cachedNoise(ctx: BaseAudioContext, seconds: number): AudioBuffer
   for (const s of NOISE_SECS) {
     if (Math.abs(s - seconds) < Math.abs(best - seconds)) best = s;
   }
-  const hit = m.get(best);
-  if (hit) return hit;
-  const len = Math.max(64, Math.floor(ctx.sampleRate * best));
-  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
-  const d = buf.getChannelData(0);
-  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
-  m.set(best, buf);
-  return buf;
+  let pool = m.get(best);
+  if (!pool) {
+    pool = [];
+    m.set(best, pool);
+  }
+  if (pool.length < VARIANTS) {
+    const len = Math.max(64, Math.floor(ctx.sampleRate * best));
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    pool.push(buf);
+  }
+  return pool[Math.floor(Math.random() * pool.length)]!;
 }
 
 const impulseCaches = new WeakMap<BaseAudioContext, AudioBuffer>();

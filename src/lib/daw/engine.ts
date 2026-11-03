@@ -83,9 +83,12 @@ function satNode(ctx: BaseAudioContext, drive: number): WaveShaperNode {
   return ws;
 }
 
-/** TR-808 style metallic partial bank — six detuned squares through a
+/** TR-808 style metallic partial bank — six detuned oscillators through a
     bandpass/highpass pair. This is what separates a real hat “tsss” from
-    a harsh noise burst. */
+    a harsh noise burst.
+    Triangles (not squares): squares fold aliasing products back into the
+    audible band above 9 kHz — that inharmonic grit is exactly the “dirty”
+    sound we are killing. A lowpass after the bank catches the rest. */
 function metal(
   ctx: BaseAudioContext,
   dest: AudioNode,
@@ -101,18 +104,23 @@ function metal(
   const hp = ctx.createBiquadFilter();
   hp.type = "highpass";
   hp.frequency.value = 6200;
+  const lp = ctx.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.value = 11500;
+  lp.Q.value = 0.5;
   const g = ctx.createGain();
   g.gain.setValueAtTime(level, time);
   g.gain.exponentialRampToValueAtTime(0.001, time + dur);
-  bp.connect(hp).connect(g).connect(dest);
+  bp.connect(hp).connect(lp).connect(g).connect(dest);
   const base = 263;
   const ratios = [1, 1.52, 1.6, 1.81, 2.23, 3.21];
   for (const r of ratios) {
     const o = ctx.createOscillator();
-    o.type = "square";
+    o.type = "triangle";
     o.frequency.value = base * r * rate;
+    o.detune.value = (Math.random() - 0.5) * 14;
     const og = ctx.createGain();
-    og.gain.value = 0.058;
+    og.gain.value = 0.085;
     o.connect(og).connect(bp);
     o.start(time);
     o.stop(time + dur + 0.06);
@@ -155,7 +163,7 @@ export function scheduleDrum(
       o.frequency.setValueAtTime(f0 * rate, time);
       o.frequency.exponentialRampToValueAtTime(f1 * rate, time + 0.075);
       o.frequency.exponentialRampToValueAtTime(f1 * 0.94 * rate, time + dur);
-      const shaper = satNode(ctx, 1.9);
+      const shaper = satNode(ctx, 1.55);
       const g = ctx.createGain();
       g.gain.setValueAtTime(vel, time);
       g.gain.exponentialRampToValueAtTime(vel * 0.42, time + 0.055);
@@ -191,12 +199,13 @@ export function scheduleDrum(
         o.start(time);
         o.stop(time + 0.24);
       });
-      // crack: bright noise riding above the body
+      // crack: bright noise riding above the body (kept under the body
+      // level so the snare reads fat, not hissy)
       const hp = ctx.createBiquadFilter();
       hp.type = "highpass";
       hp.frequency.value = 1150 * rate;
       const ng = ctx.createGain();
-      ng.gain.setValueAtTime(vel * 0.6, time);
+      ng.gain.setValueAtTime(vel * 0.48, time);
       ng.gain.exponentialRampToValueAtTime(0.001, time + 0.18);
       startNoise(ctx, hp, 0.3, time);
       hp.connect(ng).connect(dest);
@@ -392,11 +401,12 @@ export function scheduleSynth(
   const g = ctx.createGain();
   const f = ctx.createBiquadFilter();
   f.type = "lowpass";
-  f.Q.value = p.resonance;
-  // velocity shapes brightness (how hard you hit = how open the filter)
+  // velocity shapes brightness (how hard you hit = how open the filter);
+  // Q is capped so high resonance rings musically instead of shrieking
   const cutHz = cutoffHz(p.cutoff) * (0.6 + 0.4 * Math.min(1, vel / 0.95));
-  const peakCut = Math.min(16000, cutHz * (1.7 + Math.min(10, p.resonance) * 0.05));
+  const peakCut = Math.min(15500, cutHz * 1.85);
   f.frequency.setValueAtTime(Math.max(80, peakCut), time);
+  f.Q.value = Math.min(14, p.resonance);
   f.frequency.exponentialRampToValueAtTime(Math.max(90, cutHz), time + Math.max(0.03, p.decay));
   g.gain.setValueAtTime(0.0001, time);
   const peak = vel * 0.24;
@@ -498,14 +508,14 @@ function driveCurve(amount: number): Float32Array {
 }
 const driveCurves = new Map<number, Float32Array>();
 
-/** linear below ±0.8, smooth sine knee to ±1 — a ceiling that never adds
+/** linear below ±0.86, smooth sine knee to ±1 — a ceiling that never adds
     gain and never distorts at normal levels (cached once) */
 let _ceiling: Float32Array | null = null;
 function ceilingCurve(): Float32Array {
   if (_ceiling) return _ceiling;
   const n = 1024;
   const c = new Float32Array(n);
-  const knee = 0.8;
+  const knee = 0.86;
   for (let i = 0; i < n; i++) {
     const x = (i / (n - 1)) * 2 - 1;
     const a = Math.abs(x);
@@ -533,23 +543,38 @@ function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Gra
   master.connect(drive);
   drive.connect(filter);
 
+  // rumble guard: everything below ~24 Hz is inaudible but eats limiter
+  // headroom — filtering it out makes the whole mix read louder and cleaner
+  const rumble = ctx.createBiquadFilter();
+  rumble.type = "highpass";
+  rumble.frequency.value = 24;
+  rumble.Q.value = 0.6;
+  filter.connect(rumble);
+
   // bus glue: 2–3 dB of slow leveling that never pumps. The old chain
   // (−4dB / 12:1 limiter + fixed make-up gain) compressed 24/7, which is
   // exactly the squashed "cheap" sound. Two light stages beat one hard one.
   const glue = ctx.createDynamicsCompressor();
-  glue.threshold.value = -14;
-  glue.knee.value = 14;
-  glue.ratio.value = 2.2;
-  glue.attack.value = 0.008;
-  glue.release.value = 0.22;
-  filter.connect(glue);
+  glue.threshold.value = -16;
+  glue.knee.value = 16;
+  glue.ratio.value = 1.9;
+  glue.attack.value = 0.012;
+  glue.release.value = 0.3;
+  rumble.connect(glue);
 
-  // final transparent ceiling: linear below ±0.8, smooth sine knee to ±1
+  // makeup: restores the 2–3 dB the glue shaved so the mix lands at a
+  // confident density (≈ -16 LUFS) while the dynamics stay untouched —
+  // the ceiling after this stage still catches stray transients
+  const makeup = ctx.createGain();
+  makeup.gain.value = 1.26;
+  glue.connect(makeup);
+
+  // final transparent ceiling: linear below ±0.86, smooth sine knee to ±1
   // — catches the odd drum transient without audible distortion
   const ceiling = ctx.createWaveShaper();
   ceiling.curve = ceilingCurve();
   ceiling.oversample = "2x";
-  glue.connect(ceiling);
+  makeup.connect(ceiling);
 
   let tail: AudioNode = ceiling;
   const chain: SkaziChain | null = getSkaziChainOrNull(ctx);
@@ -864,7 +889,7 @@ export class DawEngine {
     o.frequency.value = accent ? 1318 : 880;
     const g = this.ctx.createGain();
     g.gain.setValueAtTime(0.0001, time);
-    g.gain.linearRampToValueAtTime(accent ? 0.32 : 0.18, time + 0.002);
+    g.gain.linearRampToValueAtTime(accent ? 0.24 : 0.13, time + 0.002);
     g.gain.exponentialRampToValueAtTime(0.0001, time + 0.045);
     o.connect(g).connect(this.ctx.destination);
     o.start(time);
@@ -955,11 +980,11 @@ export class DawEngine {
     const ctx = await this.ensure();
     if (!this.previewBus) {
       const comp = ctx.createDynamicsCompressor();
-      comp.threshold.value = -8;
-      comp.knee.value = 6;
-      comp.ratio.value = 8;
-      comp.attack.value = 0.003;
-      comp.release.value = 0.2;
+      comp.threshold.value = -10;
+      comp.knee.value = 8;
+      comp.ratio.value = 4;
+      comp.attack.value = 0.004;
+      comp.release.value = 0.24;
       comp.connect(ctx.destination);
       const bus = ctx.createGain();
       bus.gain.value = 0.9;

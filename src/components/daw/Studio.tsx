@@ -85,6 +85,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
   const [started, setStarted] = useState(false);
   const [metro, setMetro] = useState(false);
   const [fxOpen, setFxOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [fxFilter, setFxFilter] = useState(1);
   const [fxDrive, setFxDrive] = useState(0);
   const [wide, setWide] = useState(true); // lg+ layout for the tools panel
@@ -184,6 +185,15 @@ export function Studio({ onClose }: { onClose: () => void }) {
     stepRef.current = (s) => setCurrentStep(s);
     return () => {
       e.onStep = null;
+    };
+  }, []);
+
+  /* scripted-access hook: lets QA tools / power users drive the engine
+     from the console (window.__intellidaw.renderWav(), .getProject()) */
+  useEffect(() => {
+    (window as unknown as { __intellidaw?: unknown }).__intellidaw = {
+      getEngine,
+      getProject: () => projectRef.current,
     };
   }, []);
 
@@ -301,6 +311,17 @@ export function Studio({ onClose }: { onClose: () => void }) {
       }
       if (k === "m" && !ev.ctrlKey && !ev.metaKey) {
         toggleMetro();
+        return;
+      }
+      /* 1–9 selects the Nth track (unless the pads panel owns the digits) */
+      if (/^[1-9]$/.test(k) && !ev.ctrlKey && !ev.metaKey && !ev.altKey && panel !== "pads") {
+        const t = projectRef.current?.tracks[Number(k) - 1];
+        if (t) setSelTrack(t.id);
+        return;
+      }
+      if (k === "?" || (ev.shiftKey && k === "/")) {
+        ev.preventDefault();
+        setHelpOpen((h) => !h);
         return;
       }
       if (panel === "pads" && k in PAD_KEY_INDEX) {
@@ -584,7 +605,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
 
       {/* ============ transport strip ============ */}
       <div
-        className="z-30 flex items-center gap-2 border-b border-white/8 bg-[#0d0a08] px-3 py-1.5 sm:gap-3 sm:px-4"
+        className="relative z-30 flex items-center gap-2 border-b border-white/8 bg-[#0d0a08] px-3 py-1.5 sm:gap-3 sm:px-4"
         role="toolbar"
         aria-label="Transport"
       >
@@ -696,6 +717,18 @@ export function Studio({ onClose }: { onClose: () => void }) {
             </DropdownMenuContent>
           </DropdownMenu>
 
+          <button
+            onClick={() => setHelpOpen((h) => !h)}
+            className={cn(
+              "hidden h-8 w-8 items-center justify-center rounded-lg text-[13px] sm:flex",
+              helpOpen ? "bg-[#f2a43a] text-[#17120a]" : "bg-white/5 text-[#a89f91] hover:bg-white/12"
+            )}
+            title="Keyboard shortcuts (?)"
+            aria-label="Keyboard shortcuts"
+            aria-expanded={helpOpen}
+          >
+            ?
+          </button>
           <div className="hidden w-20 sm:block">
             <Meter get={getMasterLevel} />
           </div>
@@ -711,6 +744,41 @@ export function Studio({ onClose }: { onClose: () => void }) {
             aria-label="Master volume"
           />
         </div>
+        {/* keyboard shortcuts popover (the trigger is desktop-only) */}
+        {helpOpen && (
+          <div
+            className="absolute right-2 top-full z-40 mt-1 hidden w-72 rounded-xl border border-white/10 bg-[#171310] p-3 shadow-2xl sm:block"
+            role="dialog"
+            aria-label="Keyboard shortcuts"
+          >
+            <div className="mb-2 font-mono text-[9px] uppercase tracking-widest text-[#f2a43a]">
+              Keyboard shortcuts
+            </div>
+            <ul className="space-y-1.5 text-[11px] text-[#f0ece4]">
+              {[
+                ["Space", "Play / stop"],
+                ["M", "Metronome on / off"],
+                ["1–9", "Select track by number"],
+                ["Ctrl+Z", "Undo"],
+                ["Ctrl+Shift+Z", "Redo"],
+                ["?", "Toggle this help"],
+                ["Esc", "Close panel / back to site"],
+              ].map(([key, label]) => (
+                <li key={key} className="flex items-center justify-between gap-3">
+                  <kbd className="rounded border border-white/10 bg-black/40 px-1.5 py-0.5 font-mono text-[10px] text-[#f2a43a]">
+                    {key}
+                  </kbd>
+                  <span className="text-right text-[#a89f91]">{label}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-2 border-t border-white/8 pt-2 font-mono text-[9px] leading-relaxed text-[#a89f91]/70">
+              In the editor: click an empty cell to place a note · click a note to
+              grow it · shift+click a note to remove it. On drum steps,
+              shift+click cycles velocity.
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ============ workspace ============ */}

@@ -7,7 +7,7 @@
 /* ------------------------------------------------------------------ */
 
 import { memo } from "react";
-import type { DrumSound, DrumTrack, Project, SynthTrack } from "@/lib/daw/types";
+import type { DrumSound, DrumTrack, Note, Project, SynthTrack } from "@/lib/daw/types";
 import { isBlackKey, KIT_PRESETS, NOTE_HIGH, NOTE_LOW, pitchName, STEP_COUNT } from "@/lib/daw/types";
 import { cn } from "@/lib/utils";
 
@@ -233,6 +233,8 @@ function PianoRoll({
 
   const noteAt = (step: number, pitch: number) =>
     track.notes.find((n) => n.step === step && n.pitch === pitch);
+  const coveredAt = (step: number, pitch: number) =>
+    track.notes.some((n) => n.pitch === pitch && step > n.step && step < n.step + n.len);
 
   const toggleNote = (step: number, pitch: number) => {
     const existing = noteAt(step, pitch);
@@ -254,6 +256,23 @@ function PianoRoll({
         if (t.id !== track.id || t.kind !== "synth") return t;
         const id = `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
         return { ...t, notes: [...t.notes, { id, step, len: drawLen, pitch, vel: 0.9 }] };
+      }),
+    }));
+  };
+
+  /** click a placed note: 1→2→4→8→16 steps, then it removes itself.
+      shift+click removes immediately. */
+  const cycleNoteLen = (n: Note, remove: boolean) => {
+    updateProject((p) => ({
+      ...p,
+      tracks: p.tracks.map((t) => {
+        if (t.id !== track.id || t.kind !== "synth") return t;
+        if (remove) return { ...t, notes: t.notes.filter((x) => x.id !== n.id) };
+        const order = [1, 2, 4, 8, 16];
+        const idx = order.indexOf(n.len);
+        if (idx === -1 || idx === order.length - 1)
+          return { ...t, notes: t.notes.filter((x) => x.id !== n.id) };
+        return { ...t, notes: t.notes.map((x) => (x.id === n.id ? { ...x, len: order[idx + 1] } : x)) };
       }),
     }));
   };
@@ -291,14 +310,16 @@ function PianoRoll({
           clear
         </button>
         <span className="ml-auto font-mono text-[9px] text-[#a89f91]/60">
-          {track.notes.length} notes · click a cell to place / remove
+          {track.notes.length} notes · click a cell to place · click a note to grow it
         </span>
       </div>
 
-      {/* roll */}
+      {/* roll — notes render at their true length on an overlay; the cells
+          underneath stay clickable everywhere a note body doesn't cover */}
       <div className="studio-scroll max-h-64 overflow-y-auto rounded-lg border border-white/6">
         {pitches.map((pitch) => {
           const black = isBlackKey(pitch);
+          const rowNotes = track.notes.filter((n) => n.pitch === pitch);
           return (
             <div key={pitch} className="flex items-stretch border-b border-black/30 last:border-b-0">
               {/* key label */}
@@ -310,39 +331,60 @@ function PianoRoll({
               >
                 {pitchName(pitch)}
               </span>
-              {/* cells */}
-              <div className="grid min-w-0 flex-1 grid-cols-16">
-                {Array.from({ length: STEP_COUNT }, (_, step) => {
-                  const n = noteAt(step, pitch);
+              {/* cells + note overlay */}
+              <div className="relative min-w-0 flex-1">
+                <div className="grid min-w-0 grid-cols-16">
+                  {Array.from({ length: STEP_COUNT }, (_, step) => {
+                    const n = noteAt(step, pitch);
+                    const covered = !n && coveredAt(step, pitch);
+                    return (
+                      <button
+                        key={step}
+                        onClick={() => toggleNote(step, pitch)}
+                        disabled={covered}
+                        aria-label={`${pitchName(pitch)} step ${step + 1}${n ? " on" : ""}`}
+                        className={cn(
+                          "h-4 border-r border-black/20 transition-colors last:border-r-0",
+                          black ? "bg-black/40" : "bg-white/[0.02]",
+                          step % 4 === 0 && !n && "bg-white/[0.05]",
+                          currentStep === step && !n && !covered && "bg-[#f2a43a]/10",
+                          !n && !covered && "hover:bg-white/[0.1]",
+                          covered && "cursor-default"
+                        )}
+                      />
+                    );
+                  })}
+                </div>
+                {rowNotes.map((n) => {
+                  const span = Math.min(n.len, STEP_COUNT - n.step);
                   return (
                     <button
-                      key={step}
-                      onClick={() => toggleNote(step, pitch)}
-                      aria-label={`${pitchName(pitch)} step ${step + 1}${n ? " on" : ""}`}
-                      className={cn(
-                        "h-4 border-r border-black/20 transition-colors last:border-r-0",
-                        black ? "bg-black/40" : "bg-white/[0.02]",
-                        step % 4 === 0 && !n && "bg-white/[0.05]",
-                        currentStep === step && !n && "bg-[#f2a43a]/10",
-                        !n && "hover:bg-white/[0.1]"
+                      key={n.id}
+                      onClick={(e) => cycleNoteLen(n, e.shiftKey)}
+                      className="absolute inset-y-0 z-10 flex items-center overflow-hidden rounded-[3px] px-1 transition-shadow hover:shadow-[0_0_0_1px_#f2a43a]"
+                      style={{
+                        left: `${(n.step * 100) / STEP_COUNT}%`,
+                        width: `calc(${(span * 100) / STEP_COUNT}% - 2px)`,
+                        background: track.color,
+                        opacity: track.muted ? 0.35 : 0.55 + n.vel * 0.45,
+                        boxShadow: `inset 0 0 0 1px ${track.color}`,
+                      }}
+                      title={`${pitchName(pitch)} · ${n.len} step${n.len > 1 ? "s" : ""} — click to grow, shift+click to remove`}
+                      aria-label={`${pitchName(pitch)} note at step ${n.step + 1}, length ${n.len}`}
+                    >
+                      {n.len >= 4 && (
+                        <span className="w-full text-left font-mono text-[7px] font-bold text-black/55">{n.len}</span>
                       )}
-                      style={
-                        n
-                          ? {
-                              background: track.color,
-                              opacity: track.muted ? 0.35 : 0.5 + n.vel * 0.5,
-                              boxShadow: `inset 0 0 0 1px ${track.color}`,
-                            }
-                          : undefined
-                      }
-                      title={n ? `${pitchName(pitch)} · len ${n.len}` : undefined}
-                    />
+                    </button>
                   );
                 })}
               </div>
             </div>
           );
         })}
+      </div>
+      <div className="mt-1 text-center font-mono text-[9px] tracking-wide text-[#a89f91]/60">
+        CLICK EMPTY CELL = PLACE · CLICK NOTE = GROW (1→2→4→8→16) · SHIFT+CLICK NOTE = REMOVE
       </div>
     </div>
   );
