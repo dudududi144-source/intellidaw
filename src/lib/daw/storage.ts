@@ -2,7 +2,7 @@
 /*  Local project storage — no login, everything stays on the device   */
 /* ------------------------------------------------------------------ */
 
-import { autoSections, defaultPads, type DrumStep, type DrumTrack, type Note, type Project, type Section, type SynthTrack, type Track, type Waveform } from "./types";
+import { autoSections, busForTrack, defaultLiveFx, defaultPads, type BusName, type DrumStep, type DrumTrack, type LiveFxState, type Marker, type Note, type Project, type Section, type SynthTrack, type Track, type Waveform } from "./types";
 
 const KEY = "intellidaw.projects.v1";
 const CURRENT = "intellidaw.current.v1";
@@ -79,6 +79,8 @@ const clamp = (v: unknown, min: number, max: number, fallback: number) => {
 
 const WAVEFORMS: Waveform[] = ["sawtooth", "square", "triangle", "sine"];
 
+const BUSES: BusName[] = ["drums", "bass", "music"];
+
 function sanitizeTrack(t: unknown): Track | null {
   if (!t || typeof t !== "object") return null;
   const o = t as Record<string, unknown>;
@@ -93,12 +95,20 @@ function sanitizeTrack(t: unknown): Track | null {
     eqLow: clamp(o.eqLow, -12, 12, 0),
     eqMid: clamp(o.eqMid, -12, 12, 0),
     eqHigh: clamp(o.eqHigh, -12, 12, 0),
+    bus: BUSES.includes(o.bus as BusName)
+      ? (o.bus as BusName)
+      : busForTrack(o.kind === "drum" ? "drum" : "synth", typeof o.name === "string" ? o.name : ""),
+    duck: clamp(o.duck, 0, 1, 0),
   };
   if (o.kind === "drum") {
     const raw = Array.isArray(o.steps) ? (o.steps as DrumStep[]) : [];
     const steps: DrumStep[] = Array.from({ length: 16 }, (_, i) => ({
       on: !!raw[i]?.on,
       vel: clamp(raw[i]?.vel, 0, 1, 0.9),
+      chance: clamp(raw[i]?.chance, 0, 1, 1),
+      rat: clamp(raw[i]?.rat, 1, 4, 1),
+      dec: clamp(raw[i]?.dec, 0.3, 1.6, 1),
+      thr: clamp(raw[i]?.thr, 0, 1, 0),
     }));
     return {
       ...(o as unknown as Omit<DrumTrack, keyof typeof strip | "tune" | "steps">),
@@ -118,6 +128,10 @@ function sanitizeTrack(t: unknown): Track | null {
             len: clamp(n.len, 1, 16, 1),
             pitch: clamp(n.pitch, 12, 108, 60),
             vel: clamp(n.vel, 0, 1, 0.9),
+            chance: clamp(n.chance, 0, 1, 1),
+            rat: clamp(n.rat, 1, 4, 1),
+            nudge: clamp(n.nudge, -0.5, 0.5, 0),
+            bend: clamp(n.bend, -12, 12, 0),
           }))
       : [];
     return {
@@ -160,6 +174,31 @@ function sanitizeSections(raw: unknown, tracks: Track[]): Section[] {
   return cleaned;
 }
 
+function sanitizeLiveFx(raw: unknown): LiveFxState {
+  const d = defaultLiveFx();
+  if (!raw || typeof raw !== "object") return d;
+  const o = raw as Record<string, unknown>;
+  return {
+    filter: clamp(o.filter, 0, 1, d.filter),
+    drive: clamp(o.drive, 0, 1, d.drive),
+    crush: clamp(o.crush, 0, 1, d.crush),
+    delay: clamp(o.delay, 0, 1, d.delay),
+    stutter: clamp(o.stutter, 0, 1, d.stutter),
+  };
+}
+
+function sanitizeMarkers(raw: unknown): Marker[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((m) => m && typeof m === "object" && typeof (m as Marker).name === "string")
+    .slice(0, 16)
+    .map((m, i) => ({
+      id: typeof (m as Marker).id === "string" ? (m as Marker).id : `mk${i}`,
+      bar: clamp((m as Marker).bar, 0, 3, 0),
+      name: ((m as Marker).name as string).slice(0, 24),
+    }));
+}
+
 /** Normalise any parsed JSON into a safe Project, or null if hopeless. */
 export function sanitizeProject(raw: unknown): Project | null {
   if (!isValidProject(raw)) return null;
@@ -176,6 +215,12 @@ export function sanitizeProject(raw: unknown): Project | null {
     sections: sanitizeSections(p.sections, tracks),
     tracks,
     pads: Array.isArray(p.pads) && p.pads.length === 16 ? p.pads : defaultPads(),
+    loopOn: !!p.loopOn,
+    loopStart: clamp((p as { loopStart?: number }).loopStart, 0, 3, 0),
+    loopEnd: clamp((p as { loopEnd?: number }).loopEnd, 1, 4, 4),
+    countIn: !!p.countIn,
+    markers: sanitizeMarkers(p.markers),
+    liveFx: sanitizeLiveFx((p as { liveFx?: unknown }).liveFx),
     updatedAt: typeof p.updatedAt === "number" ? p.updatedAt : Date.now(),
   };
 }

@@ -1,25 +1,69 @@
 "use client";
 
-import { memo, useCallback, useRef } from "react";
-import type { Project } from "@/lib/daw/types";
+import { memo, useCallback, useState } from "react";
+import type { LiveFxState, Project } from "@/lib/daw/types";
+import { defaultLiveFx } from "@/lib/daw/types";
 import { trackIcon } from "@/lib/daw/types";
 import { getEngine } from "@/lib/daw/engine";
 import { cn } from "@/lib/utils";
-import { PanelTitle } from "./ui";
+import { PanelTitle, ParamRow } from "./ui";
 import { Button } from "@/components/ui/button";
+
+type FxKey = keyof LiveFxState;
+
+const FX_ROWS: Array<{ key: FxKey; label: string; hint: string }> = [
+  { key: "filter", label: "Filter", hint: "master LP — 100% = wide open (1 = open)" },
+  { key: "drive", label: "Drive", hint: "warm saturation" },
+  { key: "crush", label: "Crush", hint: "bit-rate mush" },
+  { key: "delay", label: "Echo", hint: "tempo-synced feedback" },
+  { key: "stutter", label: "Stutter", hint: "gate chop — heard from the next steps" },
+];
+
+const fxOf = (f: LiveFxState | undefined): LiveFxState => f ?? defaultLiveFx();
+
+/** push a live-FX value into the engine (stutter is scheduled from project.liveFx — no call needed) */
+function engineFx(key: FxKey, v: number) {
+  const e = getEngine();
+  if (key === "filter") e.setLiveFilter(v);
+  else if (key === "drive") e.setLiveDrive(v);
+  else if (key === "crush") e.setLiveCrush(v);
+  else if (key === "delay") e.setLiveDelay(v);
+}
 
 function SessionTabInner({
   project,
   currentStep,
   playing,
+  updateProject,
 }: {
   project: Project;
   currentStep: number; // absolute, -1 stopped
   playing: boolean;
+  /** when wired, live-FX moves persist into project.liveFx; otherwise engine-only + local mirror */
+  updateProject?: (fn: (p: Project) => Project) => void;
 }) {
   const curBar = currentStep >= 0 ? Math.floor(currentStep / 16) : -1;
-  const filterRef = useRef<HTMLInputElement>(null);
-  const driveRef = useRef<HTMLInputElement>(null);
+
+  // local mirror for the engine-only fallback (used when updateProject is not passed)
+  const [localFx, setLocalFx] = useState<LiveFxState>(() => fxOf(project.liveFx));
+
+  const fx = updateProject ? fxOf(project.liveFx) : localFx;
+
+  const patchFx = useCallback(
+    (patch: Partial<LiveFxState>) => {
+      if (updateProject) updateProject((p) => ({ ...p, liveFx: { ...fxOf(p.liveFx), ...patch } }));
+      else setLocalFx((f) => ({ ...fxOf(f), ...patch }));
+    },
+    [updateProject]
+  );
+
+  const setFx = useCallback(
+    (key: FxKey, v: number) => {
+      patchFx({ [key]: v });
+      engineFx(key, v);
+    },
+    [patchFx]
+  );
 
   const launchScene = useCallback((bar: number) => {
     const e = getEngine();
@@ -32,11 +76,12 @@ function SessionTabInner({
   }, []);
 
   const resetFx = useCallback(() => {
-    getEngine().setLiveFilter(1);
-    getEngine().setLiveDrive(0);
-    if (filterRef.current) filterRef.current.value = "1";
-    if (driveRef.current) driveRef.current.value = "0";
-  }, []);
+    patchFx(defaultLiveFx());
+    engineFx("filter", 1);
+    engineFx("drive", 0);
+    engineFx("crush", 0);
+    engineFx("delay", 0);
+  }, [patchFx]);
 
   const masterVol = Math.round(project.masterVolume * 100);
 
@@ -119,41 +164,21 @@ function SessionTabInner({
             reset
           </button>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <div className="mb-1 flex justify-between font-mono text-[9px] uppercase text-[#a89f91]">
-              <span>Filter sweep</span>
-              <span className="text-[#f0ece4]">LP</span>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {FX_ROWS.map((row) => (
+            <div
+              key={row.key}
+              title={row.hint}
+              className="rounded-lg bg-black/30 px-2.5 py-2 ring-1 ring-inset ring-white/5"
+            >
+              <ParamRow
+                label={row.label}
+                value={fx[row.key]}
+                onChange={(v) => setFx(row.key, v)}
+                format={(v) => `${Math.round(v * 100)}%`}
+              />
             </div>
-            <input
-              ref={filterRef}
-              type="range"
-              min={0}
-              max={1}
-              step={0.01}
-              defaultValue={1}
-              onChange={(e) => getEngine().setLiveFilter(Number(e.target.value))}
-              className="h-1 w-full cursor-pointer appearance-none rounded-full bg-white/10 accent-[#f2a43a]"
-              aria-label="Master low-pass filter"
-            />
-          </div>
-          <div>
-            <div className="mb-1 flex justify-between font-mono text-[9px] uppercase text-[#a89f91]">
-              <span>Drive</span>
-              <span className="text-[#f0ece4]">warm</span>
-            </div>
-            <input
-              ref={driveRef}
-              type="range"
-              min={0}
-              max={1}
-              step={0.01}
-              defaultValue={0}
-              onChange={(e) => getEngine().setLiveDrive(Number(e.target.value))}
-              className="h-1 w-full cursor-pointer appearance-none rounded-full bg-white/10 accent-[#e5533d]"
-              aria-label="Master drive"
-            />
-          </div>
+          ))}
         </div>
       </div>
 

@@ -25,6 +25,14 @@ export type Waveform = "sawtooth" | "square" | "triangle" | "sine";
 export interface DrumStep {
   on: boolean;
   vel: number; // 0..1
+  /** probability the hit fires (0..1, 1 = always) */
+  chance?: number;
+  /** ratchet: repeat the hit N times inside the step (1..4) */
+  rat?: number;
+  /** decay scale — 0.35 short/half-bar snappy … 1.6 long (default 1) */
+  dec?: number;
+  /** throw: pitch dives down over the hit (0..1) */
+  thr?: number;
 }
 
 export interface Note {
@@ -33,7 +41,17 @@ export interface Note {
   len: number; // in steps
   pitch: number; // MIDI number
   vel: number; // 0..1
+  /** probability the note plays (0..1) */
+  chance?: number;
+  /** ratchet repeats inside the note (1..4) */
+  rat?: number;
+  /** timing nudge in steps (-0.5..0.5) */
+  nudge?: number;
+  /** pitch slide-in from N semitones below/above (-12..12) */
+  bend?: number;
 }
+
+export type BusName = "drums" | "bass" | "music";
 
 export interface ChannelStrip {
   volume: number; // 0..1.3
@@ -45,6 +63,15 @@ export interface ChannelStrip {
   eqLow: number; // dB -12..12 (low shelf @ 90Hz)
   eqMid: number; // dB -12..12 (peak @ 1kHz)
   eqHigh: number; // dB -12..12 (high shelf @ 7kHz)
+  bus: BusName; // group bus the channel feeds
+  duck: number; // 0..1 kick-sidechain depth (PITAPUMP-style pump)
+}
+
+/** guess the right group bus from a track's role */
+export function busForTrack(kind: "drum" | "synth", name = ""): BusName {
+  if (kind === "drum") return "drums";
+  if (/bass|303|acid|sub/i.test(name)) return "bass";
+  return "music";
 }
 
 /* ---------------- song arrangement ---------------- */
@@ -123,6 +150,30 @@ export interface KitPad {
   custom?: { name: string; dataUrl: string } | null;
 }
 
+/** transport marker — flags a moment in the song you can jump to */
+export interface Marker {
+  id: string;
+  bar: number; // 0..SONG_BARS-1
+  name: string;
+}
+
+/** master live-FX state (persisted with the project) */
+export interface LiveFxState {
+  filter: number; // 0..1 (1 = open)
+  drive: number; // 0..1
+  crush: number; // 0..1 bit/crush depth
+  delay: number; // 0..1 tempo-synced echo blend
+  stutter: number; // 0..1 gate chop depth
+}
+
+export const defaultLiveFx = (): LiveFxState => ({
+  filter: 1,
+  drive: 0,
+  crush: 0,
+  delay: 0,
+  stutter: 0,
+});
+
 export interface Project {
   id: string;
   name: string;
@@ -133,6 +184,13 @@ export interface Project {
   sections: Section[]; // SONG_BARS sections, one per bar
   tracks: Track[];
   pads: KitPad[];
+  /** loop a bar range instead of the whole song */
+  loopOn: boolean;
+  loopStart: number; // bar (inclusive)
+  loopEnd: number; // bar (exclusive)
+  countIn: boolean; // 4-beat count-in before play
+  markers: Marker[];
+  liveFx: LiveFxState;
   updatedAt: number;
 }
 
@@ -160,6 +218,8 @@ const ch = (o: Partial<ChannelStrip> = {}): ChannelStrip => ({
   eqLow: 0,
   eqMid: 0,
   eqHigh: 0,
+  bus: "music",
+  duck: 0,
   ...o,
 });
 
@@ -180,7 +240,7 @@ export function makeDrumTrack(
     color,
     tune: 0,
     steps,
-    ...ch(),
+    ...ch({ bus: busForTrack("drum", name) }),
     ...opts,
   };
 }
@@ -207,7 +267,7 @@ export function makeSynthTrack(
     octave: 0,
     glide: false,
     notes,
-    ...ch(),
+    ...ch({ bus: busForTrack("synth", name) }),
     ...opts,
   };
 }
@@ -366,6 +426,12 @@ export function createDefaultProject(): Project {
     pads: defaultPads(),
     tracks,
     sections: autoSections(tracks, true),
+    loopOn: false,
+    loopStart: 0,
+    loopEnd: SONG_BARS,
+    countIn: false,
+    markers: [],
+    liveFx: defaultLiveFx(),
   };
 }
 
@@ -591,6 +657,281 @@ export const TEMPLATES: Template[] = [
         makeSynthTrack("Bass", "#f2a43a", { octave: -1, cutoff: 0.3 }, []),
         makeSynthTrack("Keys", "#e5c15a", {}, []),
         makeSynthTrack("Lead", "#8fbf6b", {}, []),
+      ],
+    }),
+  },
+  {
+    name: "Drum & Bass",
+    bpm: 174,
+    tag: "174",
+    build: () => ({
+      ...createDefaultProject(),
+      id: uid(),
+      name: "DnB Rush",
+      bpm: 174,
+      swing: 0,
+      tracks: [
+        makeDrumTrack("kick", "Kick", "#f2a43a", [0, 10]),
+        makeDrumTrack("snare", "Snare", "#e5c15a", [4, 12, 14]),
+        makeDrumTrack("chat", "C Hat", "#d97b5a", [2, 6, 8, 14], { volume: 0.5 }),
+        makeDrumTrack("ride", "Ride", "#b8a98f", [6], { volume: 0.3 }),
+        makeSynthTrack(
+          "Reese",
+          "#f2a43a",
+          { waveform: "sawtooth", cutoff: 0.3, resonance: 9, sustain: 0.6, release: 0.15, detune: 26, octave: -1, volume: 0.9 },
+          [note(0, 6, 33), note(8, 4, 36), note(12, 4, 31)]
+        ),
+        makeSynthTrack(
+          "Pad",
+          "#b8a98f",
+          { waveform: "triangle", cutoff: 0.5, attack: 0.4, release: 0.9, sustain: 0.6, reverbSend: 0.5, volume: 0.3 },
+          [note(0, 16, 57, 0.45), note(0, 16, 60, 0.45), note(0, 16, 64, 0.45)]
+        ),
+      ],
+    }),
+  },
+  {
+    name: "Trap",
+    bpm: 140,
+    tag: "140",
+    build: () => ({
+      ...createDefaultProject(),
+      id: uid(),
+      name: "Trap Night",
+      bpm: 140,
+      swing: 0,
+      tracks: [
+        makeDrumTrack("kick", "Kick", "#f2a43a", [0, 6, 11]),
+        makeDrumTrack("clap", "Clap", "#e5c15a", [8], { volume: 0.75 }),
+        makeDrumTrack("chat", "C Hat", "#d97b5a", [0, 2, 3, 4, 6, 8, 10, 11, 12, 14, 15], { volume: 0.4 }),
+        makeDrumTrack("conga", "Conga", "#b8a98f", [7], { volume: 0.35 }),
+        makeSynthTrack(
+          "808",
+          "#f2a43a",
+          { waveform: "sine", cutoff: 0.4, sustain: 0.5, release: 0.25, decay: 0.3, octave: -1, volume: 1.0 },
+          [note(0, 5, 33), note(6, 3, 36), note(11, 5, 31)]
+        ),
+        makeSynthTrack(
+          "Bell",
+          "#8fbf6b",
+          { waveform: "sine", cutoff: 0.8, decay: 0.35, sustain: 0.1, release: 0.4, delaySend: 0.35, volume: 0.45 },
+          [note(0, 2, 76), note(4, 2, 79), note(8, 2, 75), note(12, 2, 72)]
+        ),
+      ],
+    }),
+  },
+  {
+    name: "Synthwave",
+    bpm: 96,
+    tag: "96",
+    build: () => ({
+      ...createDefaultProject(),
+      id: uid(),
+      name: "Neon Coast",
+      bpm: 96,
+      swing: 0,
+      tracks: [
+        makeDrumTrack("kick", "Kick", "#f2a43a", [0, 4, 8, 12]),
+        makeDrumTrack("clap", "Clap", "#e5c15a", [4, 12], { volume: 0.65 }),
+        makeDrumTrack("chat", "C Hat", "#d97b5a", [2, 6, 10, 14], { volume: 0.45 }),
+        makeDrumTrack("tom", "Tom", "#b8a98f", [14], { volume: 0.4 }),
+        makeSynthTrack(
+          "Bass",
+          "#f2a43a",
+          { waveform: "square", cutoff: 0.32, resonance: 7, sustain: 0.35, release: 0.1, octave: -1, volume: 0.9 },
+          [note(0, 1, 40), note(2, 1, 40), note(4, 1, 40), note(6, 1, 40), note(8, 1, 45), note(10, 1, 45), note(12, 1, 43), note(14, 1, 38)]
+        ),
+        makeSynthTrack(
+          "Lead",
+          "#c084fc",
+          { waveform: "sawtooth", cutoff: 0.7, resonance: 6, decay: 0.4, sustain: 0.3, release: 0.4, detune: 18, delaySend: 0.4, reverbSend: 0.3, volume: 0.5 },
+          [note(0, 3, 69, 0.7), note(4, 2, 72, 0.65), note(8, 4, 76, 0.75), note(12, 2, 74, 0.6), note(14, 2, 72, 0.7)]
+        ),
+        makeSynthTrack(
+          "Pad",
+          "#b8a98f",
+          { waveform: "sawtooth", cutoff: 0.45, attack: 0.5, sustain: 0.65, release: 1.0, detune: 14, reverbSend: 0.5, volume: 0.28 },
+          [note(0, 16, 45, 0.5), note(0, 16, 52, 0.5), note(0, 16, 57, 0.5)]
+        ),
+      ],
+    }),
+  },
+  {
+    name: "Ambient",
+    bpm: 72,
+    tag: "72",
+    build: () => ({
+      ...createDefaultProject(),
+      id: uid(),
+      name: "Slow Drift",
+      bpm: 72,
+      swing: 0.1,
+      tracks: [
+        makeDrumTrack("kick", "Kick", "#f2a43a", [0, 8], { volume: 0.6 }),
+        makeDrumTrack("shaker", "Shaker", "#d97b5a", [4, 12], { volume: 0.28 }),
+        makeDrumTrack("ride", "Ride", "#b8a98f", [10], { volume: 0.22 }),
+        makeSynthTrack(
+          "Drone",
+          "#b8a98f",
+          { waveform: "triangle", cutoff: 0.38, attack: 1.2, decay: 1.5, sustain: 0.8, release: 2.0, detune: 10, reverbSend: 0.6, volume: 0.4 },
+          [note(0, 16, 45, 0.5), note(0, 16, 52, 0.5), note(0, 16, 59, 0.4)]
+        ),
+        makeSynthTrack(
+          "Keys",
+          "#e5c15a",
+          { waveform: "sine", cutoff: 0.6, attack: 0.05, decay: 0.8, sustain: 0.2, release: 1.2, delaySend: 0.4, reverbSend: 0.5, volume: 0.42 },
+          [note(0, 4, 72, 0.5), note(6, 3, 76, 0.45), note(10, 4, 71, 0.5), note(14, 2, 67, 0.4)]
+        ),
+      ],
+    }),
+  },
+  {
+    name: "Disco",
+    bpm: 118,
+    tag: "118",
+    build: () => ({
+      ...createDefaultProject(),
+      id: uid(),
+      name: "Mirror Ball",
+      bpm: 118,
+      swing: 0.06,
+      tracks: [
+        makeDrumTrack("kick", "Kick", "#f2a43a", [0, 4, 8, 12]),
+        makeDrumTrack("snare", "Snare", "#e5c15a", [4, 12], { volume: 0.7 }),
+        makeDrumTrack("ohat", "O Hat", "#d97b5a", [2, 6, 10, 14], { volume: 0.5 }),
+        makeDrumTrack("shaker", "Shaker", "#b8a98f", [1, 3, 5, 7, 9, 11, 13, 15], { volume: 0.35 }),
+        makeSynthTrack(
+          "Bass",
+          "#f2a43a",
+          { waveform: "sawtooth", cutoff: 0.36, sustain: 0.25, release: 0.08, octave: -1, volume: 0.9 },
+          [note(0, 1, 45), note(1, 1, 52), note(2, 1, 45), note(4, 1, 48), note(6, 1, 52), note(8, 1, 43), note(10, 1, 50), note(12, 1, 45), note(14, 1, 43)]
+        ),
+        makeSynthTrack(
+          "Strings",
+          "#8fbf6b",
+          { waveform: "sawtooth", cutoff: 0.55, attack: 0.08, sustain: 0.5, release: 0.4, detune: 10, reverbSend: 0.4, volume: 0.35 },
+          [note(0, 4, 64, 0.55), note(0, 4, 69, 0.55), note(8, 4, 65, 0.55), note(8, 4, 72, 0.55)]
+        ),
+      ],
+    }),
+  },
+  {
+    name: "Reggaeton",
+    bpm: 96,
+    tag: "96",
+    build: () => ({
+      ...createDefaultProject(),
+      id: uid(),
+      name: "Dembow Heat",
+      bpm: 96,
+      swing: 0,
+      tracks: [
+        makeDrumTrack("kick", "Kick", "#f2a43a", [0, 4, 8, 12]),
+        makeDrumTrack("snare", "Snare", "#e5c15a", [3, 7, 11, 15], { volume: 0.75 }),
+        makeDrumTrack("chat", "C Hat", "#d97b5a", [2, 6, 10, 14], { volume: 0.45 }),
+        makeDrumTrack("conga", "Conga", "#b8a98f", [6, 14], { volume: 0.4 }),
+        makeSynthTrack(
+          "Bass",
+          "#f2a43a",
+          { waveform: "sine", cutoff: 0.35, sustain: 0.4, release: 0.12, octave: -1, volume: 0.95 },
+          [note(0, 3, 40), note(4, 3, 40), note(8, 3, 43), note(12, 3, 38)]
+        ),
+        makeSynthTrack(
+          "Pluck",
+          "#8fbf6b",
+          { waveform: "triangle", cutoff: 0.7, decay: 0.2, sustain: 0.1, release: 0.2, delaySend: 0.3, volume: 0.5 },
+          [note(0, 1, 64), note(2, 1, 67), note(4, 1, 71), note(8, 1, 64), note(10, 1, 69), note(12, 1, 72)]
+        ),
+      ],
+    }),
+  },
+  {
+    name: "Jungle",
+    bpm: 168,
+    tag: "168",
+    build: () => ({
+      ...createDefaultProject(),
+      id: uid(),
+      name: "Amen Cut",
+      bpm: 168,
+      swing: 0.05,
+      tracks: [
+        makeDrumTrack("kick", "Kick", "#f2a43a", [0, 10]),
+        makeDrumTrack("snare", "Snare", "#e5c15a", [4, 12, 15], { volume: 0.8 }),
+        makeDrumTrack("chat", "C Hat", "#d97b5a", [2, 5, 8, 11, 14], { volume: 0.45 }),
+        makeDrumTrack("chop", "Chop", "#b8a98f", [6, 13], { volume: 0.4 }),
+        makeSynthTrack(
+          "Sub",
+          "#f2a43a",
+          { waveform: "sine", cutoff: 0.3, sustain: 0.55, release: 0.15, octave: -1, volume: 0.95 },
+          [note(0, 5, 33), note(8, 3, 36), note(12, 3, 31)]
+        ),
+        makeSynthTrack(
+          "Stab",
+          "#c084fc",
+          { waveform: "sawtooth", cutoff: 0.5, decay: 0.18, sustain: 0.12, release: 0.2, delaySend: 0.35, volume: 0.42 },
+          [note(2, 1, 64), note(2, 1, 67), note(9, 1, 62), note(9, 1, 65)]
+        ),
+      ],
+    }),
+  },
+  {
+    name: "Afro House",
+    bpm: 122,
+    tag: "122",
+    build: () => ({
+      ...createDefaultProject(),
+      id: uid(),
+      name: "Sunset Kwet",
+      bpm: 122,
+      swing: 0.12,
+      tracks: [
+        makeDrumTrack("kick", "Kick", "#f2a43a", [0, 4, 8, 12]),
+        makeDrumTrack("conga", "Conga", "#e5c15a", [3, 6, 11, 14], { volume: 0.55 }),
+        makeDrumTrack("shaker", "Shaker", "#d97b5a", [2, 6, 10, 14], { volume: 0.4 }),
+        makeDrumTrack("perc", "Perc", "#b8a98f", [7, 15], { volume: 0.45 }),
+        makeSynthTrack(
+          "Bass",
+          "#f2a43a",
+          { waveform: "sawtooth", cutoff: 0.32, sustain: 0.3, release: 0.1, octave: -1, volume: 0.9 },
+          [note(0, 2, 45), note(3, 1, 48), note(6, 2, 45), note(8, 2, 43), note(11, 1, 45), note(14, 2, 40)]
+        ),
+        makeSynthTrack(
+          "Marimba",
+          "#8fbf6b",
+          { waveform: "triangle", cutoff: 0.65, decay: 0.25, sustain: 0.1, release: 0.25, delaySend: 0.25, volume: 0.5 },
+          [note(0, 1, 72), note(3, 1, 76), note(6, 1, 79), note(8, 1, 76), note(11, 1, 72), note(14, 1, 69)]
+        ),
+      ],
+    }),
+  },
+  {
+    name: "Drill",
+    bpm: 142,
+    tag: "142",
+    build: () => ({
+      ...createDefaultProject(),
+      id: uid(),
+      name: "UK Slide",
+      bpm: 142,
+      swing: 0,
+      tracks: [
+        makeDrumTrack("kick", "Kick", "#f2a43a", [0, 7, 10]),
+        makeDrumTrack("snare", "Snare", "#e5c15a", [4, 12], { volume: 0.75 }),
+        makeDrumTrack("chat", "C Hat", "#d97b5a", [0, 2, 4, 6, 8, 10, 12, 14], { volume: 0.4 }),
+        makeDrumTrack("rim", "Rim", "#b8a98f", [5, 13], { volume: 0.35 }),
+        makeSynthTrack(
+          "808",
+          "#f2a43a",
+          { waveform: "sine", cutoff: 0.38, sustain: 0.45, release: 0.2, decay: 0.35, glide: true, octave: -1, volume: 1.0 },
+          [note(0, 4, 33), note(6, 2, 31), note(8, 4, 36), note(12, 2, 33), note(14, 2, 29)]
+        ),
+        makeSynthTrack(
+          "Slide",
+          "#c084fc",
+          { waveform: "sawtooth", cutoff: 0.45, resonance: 10, decay: 0.3, sustain: 0.2, release: 0.3, glide: true, delaySend: 0.3, volume: 0.4 },
+          [note(0, 3, 64), note(4, 2, 62), note(8, 3, 67), note(12, 3, 60)]
+        ),
       ],
     }),
   },

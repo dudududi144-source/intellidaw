@@ -2,13 +2,16 @@
 
 /* ------------------------------------------------------------------ */
 /*  EditorPanel — the note editor that follows the selected track.     */
-/*  Drum track → 16-step velocity grid.  Synth track → piano roll.     */
-/*  Always visible below the timeline: no tab switching needed.        */
+/*  Drum track → 16-step velocity grid + STEP FX bar (chance / ratchet */
+/*  / decay / throw).  Synth track → piano roll + NOTE FX bar (vel /   */
+/*  chance / ratchet / nudge / bend).  Always visible below the        */
+/*  timeline: no tab switching needed.                                 */
 /* ------------------------------------------------------------------ */
 
-import { memo } from "react";
-import type { DrumSound, DrumTrack, Note, Project, SynthTrack } from "@/lib/daw/types";
+import { memo, useEffect, useState } from "react";
+import type { DrumSound, DrumStep, DrumTrack, Note, Project, SynthTrack } from "@/lib/daw/types";
 import { isBlackKey, KIT_PRESETS, NOTE_HIGH, NOTE_LOW, pitchName, STEP_COUNT } from "@/lib/daw/types";
+import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -21,6 +24,102 @@ interface Props {
   onPreviewDrum: (sound: DrumSound, vel: number) => void;
   onPreviewNote: (t: SynthTrack, pitch: number) => void;
 }
+
+/* ---------------- shared FX-bar building blocks ---------------- */
+
+/** compact labeled slider used inside the STEP FX / NOTE FX bars */
+function MiniSlider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  format,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  format: (v: number) => string;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="flex min-w-[92px] flex-1 flex-col gap-1">
+      <span className="flex items-baseline justify-between gap-1 font-mono text-[9px] uppercase tracking-widest text-[#a89f91]">
+        {label}
+        <span className="text-[#f0ece4]">{format(value)}</span>
+      </span>
+      <Slider
+        value={[value]}
+        min={min}
+        max={max}
+        step={step}
+        onValueChange={(v) => onChange(v[0])}
+        aria-label={label}
+        className="h-6 cursor-pointer [&_[data-slot=slider-thumb]]:size-3"
+      />
+    </div>
+  );
+}
+
+/** integer 1..4 segmented control for the ratchet FX */
+function Ratchet({ value, onChange }: { value: number; onChange: (n: number) => void }) {
+  return (
+    <div className="flex min-w-[104px] flex-1 flex-col gap-1">
+      <span className="font-mono text-[9px] uppercase tracking-widest text-[#a89f91]">Ratchet</span>
+      <div className="flex overflow-hidden rounded-lg border border-white/8">
+        {[1, 2, 3, 4].map((n) => (
+          <button
+            key={n}
+            onClick={() => onChange(n)}
+            aria-pressed={value === n}
+            aria-label={`Ratchet ${n}`}
+            className={cn(
+              "h-6 flex-1 font-mono text-[10px] transition-colors",
+              n > 1 && "border-l border-white/8",
+              value === n
+                ? "bg-[#f2a43a] font-bold text-[#17120a]"
+                : "bg-[#0f0c0a] text-[#a89f91] hover:bg-white/5 hover:text-[#f0ece4]"
+            )}
+          >
+            {n}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** small round × that closes / deselects the FX bar */
+function BarClose({ onClick, label }: { onClick: () => void; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className="ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/5 font-mono text-[11px] text-[#a89f91] transition-colors hover:bg-white/10 hover:text-[#f0ece4]"
+    >
+      ×
+    </button>
+  );
+}
+
+const hasDrumFx = (s: DrumStep) =>
+  (s.chance !== undefined && s.chance !== 1) ||
+  (s.rat !== undefined && s.rat !== 1) ||
+  (s.dec !== undefined && s.dec !== 1) ||
+  (s.thr !== undefined && s.thr !== 0);
+
+const hasNoteFx = (n: Note) =>
+  (n.chance !== undefined && n.chance !== 1) ||
+  (n.rat !== undefined && n.rat !== 1) ||
+  (n.nudge !== undefined && n.nudge !== 0) ||
+  (n.bend !== undefined && n.bend !== 0);
+
+const fmtNudge = (v: number) => `${v > 0 ? "+" : ""}${parseFloat(v.toFixed(3))}`;
+const fmtBend = (v: number) => `${v > 0 ? "+" : ""}${Math.round(v)}st`;
 
 export const EditorPanel = memo(function EditorPanel({
   project,
@@ -91,9 +190,45 @@ function DrumEditor({
   currentStep: number;
   onPreview: (sound: DrumSound, vel: number) => void;
 }) {
+  const [focusedStep, setFocusedStep] = useState<number | null>(null);
+  const [prevTrackId, setPrevTrackId] = useState(track.id);
+
+  // switching drum tracks clears the step focus (state adjusted during render)
+  if (prevTrackId !== track.id) {
+    setPrevTrackId(track.id);
+    setFocusedStep(null);
+  }
+
+  const setStepOn = (i: number, on: boolean) => {
+    updateProject((p) => ({
+      ...p,
+      tracks: p.tracks.map((t) => {
+        if (t.id !== track.id || t.kind !== "drum") return t;
+        const steps = [...t.steps];
+        steps[i] = { ...steps[i], on };
+        return { ...t, steps };
+      }),
+    }));
+  };
+
+  /** patch one FX field on a step (chance / rat / dec / thr) */
+  const patchStep = (idx: number, patch: Partial<DrumStep>) => {
+    updateProject((p) => ({
+      ...p,
+      tracks: p.tracks.map((t) => {
+        if (t.id !== track.id || t.kind !== "drum") return t;
+        const steps = [...t.steps];
+        steps[idx] = { ...steps[idx], ...patch };
+        return { ...t, steps };
+      }),
+    }));
+  };
+
   const toggleStep = (i: number, shift: boolean) => {
     const cur = track.steps[i];
     if (shift && cur.on) {
+      // shift+click: cycle velocity (and focus the step)
+      setFocusedStep(i);
       updateProject((p) => ({
         ...p,
         tracks: p.tracks.map((t) => {
@@ -107,19 +242,25 @@ function DrumEditor({
       }));
       return;
     }
-    if (!cur.on) onPreview(track.sound, cur.vel);
-    updateProject((p) => ({
-      ...p,
-      tracks: p.tracks.map((t) => {
-        if (t.id !== track.id || t.kind !== "drum") return t;
-        const steps = [...t.steps];
-        steps[i] = { ...steps[i], on: !steps[i].on };
-        return { ...t, steps };
-      }),
-    }));
+    if (cur.on) {
+      // click on an ON step: first click focuses it, clicking the focused
+      // step again unfocuses AND turns it off
+      if (focusedStep === i) {
+        setFocusedStep(null);
+        setStepOn(i, false);
+      } else {
+        setFocusedStep(i);
+      }
+      return;
+    }
+    // off → on: preview + focus (outside the updater, strict-mode safe)
+    onPreview(track.sound, cur.vel);
+    setFocusedStep(i);
+    setStepOn(i, true);
   };
 
   const setAll = (vals: boolean[]) => {
+    if (focusedStep !== null && !vals[focusedStep]) setFocusedStep(null);
     updateProject((p) => ({
       ...p,
       tracks: p.tracks.map((t) =>
@@ -129,6 +270,9 @@ function DrumEditor({
       ),
     }));
   };
+
+  const fs =
+    focusedStep !== null ? { idx: focusedStep, step: track.steps[focusedStep] } : null;
 
   return (
     <div className="p-3">
@@ -175,15 +319,19 @@ function DrumEditor({
           <button
             key={i}
             onClick={(e) => toggleStep(i, e.shiftKey)}
-            aria-label={`${track.name} step ${i + 1}${s.on ? " on" : " off"}`}
+            aria-label={`${track.name} step ${i + 1}${s.on ? " on" : " off"}${hasDrumFx(s) ? " · fx" : ""}`}
             aria-pressed={s.on}
             className={cn(
-              "h-9 w-full min-w-[18px] rounded-[5px] transition-all sm:h-10",
+              "relative h-9 w-full min-w-[18px] rounded-[5px] transition-all sm:h-10",
               s.on ? "step-on" : "",
               i % 4 === 0 && !s.on ? "bg-white/[0.07]" : "",
               i % 4 !== 0 && !s.on ? "bg-white/[0.035]" : "",
               !s.on && "hover:bg-white/[0.09]",
-              currentStep === i && "ring-1 ring-[#f2a43a]/70"
+              focusedStep === i
+                ? "ring-2 ring-[#f2a43a]"
+                : currentStep === i
+                  ? "ring-1 ring-[#f2a43a]/70"
+                  : ""
             )}
             style={
               s.on
@@ -195,7 +343,14 @@ function DrumEditor({
                   }
                 : { opacity: track.muted ? 0.4 : 1 }
             }
-          />
+          >
+            {hasDrumFx(s) && (
+              <span
+                aria-hidden
+                className="absolute -bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-[#c084fc]"
+              />
+            )}
+          </button>
         ))}
       </div>
       <div className="mt-1.5 flex justify-between font-mono text-[9px] text-[#a89f91]/60">
@@ -204,14 +359,55 @@ function DrumEditor({
         <span>3</span>
         <span>4</span>
       </div>
+
+      {/* STEP FX bar — per-step probability / ratchet / decay / throw */}
+      {fs && fs.step.on && (
+        <div className="mt-2 flex flex-wrap items-center gap-3 rounded-xl border border-white/8 bg-black/30 p-2.5">
+          <span className="font-mono text-[9px] uppercase tracking-widest text-[#f2a43a]">
+            Step FX · {String(fs.idx + 1).padStart(2, "0")}
+          </span>
+          <MiniSlider
+            label="Chance %"
+            value={(fs.step.chance ?? 1) * 100}
+            min={0}
+            max={100}
+            step={1}
+            format={(v) => `${Math.round(v)}%`}
+            onChange={(v) => patchStep(fs.idx, { chance: v / 100 })}
+          />
+          <Ratchet value={fs.step.rat ?? 1} onChange={(n) => patchStep(fs.idx, { rat: n })} />
+          <MiniSlider
+            label="Decay"
+            value={fs.step.dec ?? 1}
+            min={0.3}
+            max={1.6}
+            step={0.05}
+            format={(v) => `${v.toFixed(2)}×`}
+            onChange={(v) => patchStep(fs.idx, { dec: v })}
+          />
+          <MiniSlider
+            label="Throw"
+            value={(fs.step.thr ?? 0) * 100}
+            min={0}
+            max={100}
+            step={1}
+            format={(v) => `${Math.round(v)}%`}
+            onChange={(v) => patchStep(fs.idx, { thr: v / 100 })}
+          />
+          <BarClose label="Close step FX" onClick={() => setFocusedStep(null)} />
+        </div>
+      )}
+
       <div className="mt-1 text-center font-mono text-[9px] tracking-wide text-[#a89f91]/60">
-        CLICK TOGGLES · SHIFT+CLICK CYCLES VELOCITY
+        CLICK ON STEP = FOCUS FX · CLICK FOCUSED STEP = OFF · SHIFT+CLICK CYCLES VELOCITY
       </div>
     </div>
   );
 }
 
 /* ---------------- piano roll (synth track) ---------------- */
+
+const LEN_ORDER = [1, 2, 4, 8, 16];
 
 function PianoRoll({
   track,
@@ -228,6 +424,13 @@ function PianoRoll({
   onDrawLen: (n: number) => void;
   onPreviewNote: (t: SynthTrack, pitch: number) => void;
 }) {
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+
+  // switching synth tracks clears the note selection
+  useEffect(() => {
+    setSelectedNoteId(null);
+  }, [track.id]);
+
   const pitches: number[] = [];
   for (let p = NOTE_HIGH; p >= NOTE_LOW; p--) pitches.push(p);
 
@@ -236,43 +439,77 @@ function PianoRoll({
   const coveredAt = (step: number, pitch: number) =>
     track.notes.some((n) => n.pitch === pitch && step > n.step && step < n.step + n.len);
 
-  const toggleNote = (step: number, pitch: number) => {
-    const existing = noteAt(step, pitch);
-    if (existing) {
-      updateProject((p) => ({
-        ...p,
-        tracks: p.tracks.map((t) =>
-          t.id === track.id && t.kind === "synth"
-            ? { ...t, notes: t.notes.filter((n) => n.id !== existing.id) }
-            : t
-        ),
-      }));
-      return;
-    }
+  const selNote = selectedNoteId
+    ? track.notes.find((n) => n.id === selectedNoteId) ?? null
+    : null;
+
+  /** patch any fields (vel / chance / rat / nudge / bend) on the selected note */
+  const patchNote = (patch: Partial<Note>) => {
+    const id = selectedNoteId;
+    if (!id) return;
+    updateProject((p) => ({
+      ...p,
+      tracks: p.tracks.map((t) =>
+        t.id === track.id && t.kind === "synth"
+          ? { ...t, notes: t.notes.map((n) => (n.id === id ? { ...n, ...patch } : n)) }
+          : t
+      ),
+    }));
+  };
+
+  const placeNote = (step: number, pitch: number) => {
+    const id = `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     onPreviewNote(track, pitch); // outside the updater (strict-mode safe)
+    setSelectedNoteId(id);
     updateProject((p) => ({
       ...p,
       tracks: p.tracks.map((t) => {
         if (t.id !== track.id || t.kind !== "synth") return t;
-        const id = `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
         return { ...t, notes: [...t.notes, { id, step, len: drawLen, pitch, vel: 0.9 }] };
       }),
     }));
   };
 
-  /** click a placed note: 1→2→4→8→16 steps, then it removes itself.
-      shift+click removes immediately. */
-  const cycleNoteLen = (n: Note, remove: boolean) => {
+  const onCellClick = (step: number, pitch: number) => {
+    const existing = noteAt(step, pitch);
+    if (existing) {
+      setSelectedNoteId(existing.id);
+      return;
+    }
+    placeNote(step, pitch);
+  };
+
+  /** click a note: first click selects it, clicking the selected note grows
+      it (1→2→4→8→16 steps, then it removes itself).  shift+click removes. */
+  const onNoteClick = (n: Note, shift: boolean) => {
+    if (shift) {
+      if (selectedNoteId === n.id) setSelectedNoteId(null);
+      updateProject((p) => ({
+        ...p,
+        tracks: p.tracks.map((t) =>
+          t.id === track.id && t.kind === "synth"
+            ? { ...t, notes: t.notes.filter((x) => x.id !== n.id) }
+            : t
+        ),
+      }));
+      return;
+    }
+    if (selectedNoteId !== n.id) {
+      setSelectedNoteId(n.id);
+      return;
+    }
+    const idx = LEN_ORDER.indexOf(n.len);
+    const willRemove = idx === -1 || idx === LEN_ORDER.length - 1;
+    if (willRemove) setSelectedNoteId(null);
     updateProject((p) => ({
       ...p,
       tracks: p.tracks.map((t) => {
         if (t.id !== track.id || t.kind !== "synth") return t;
-        if (remove) return { ...t, notes: t.notes.filter((x) => x.id !== n.id) };
-        const order = [1, 2, 4, 8, 16];
-        const idx = order.indexOf(n.len);
-        if (idx === -1 || idx === order.length - 1)
-          return { ...t, notes: t.notes.filter((x) => x.id !== n.id) };
-        return { ...t, notes: t.notes.map((x) => (x.id === n.id ? { ...x, len: order[idx + 1] } : x)) };
+        if (willRemove) return { ...t, notes: t.notes.filter((x) => x.id !== n.id) };
+        return {
+          ...t,
+          notes: t.notes.map((x) => (x.id === n.id ? { ...x, len: LEN_ORDER[idx + 1] } : x)),
+        };
       }),
     }));
   };
@@ -299,18 +536,19 @@ function PianoRoll({
           ))}
         </div>
         <button
-          onClick={() =>
+          onClick={() => {
+            setSelectedNoteId(null);
             updateProject((p) => ({
               ...p,
               tracks: p.tracks.map((t) => (t.id === track.id ? { ...t, notes: [] } : t)),
-            }))
-          }
+            }));
+          }}
           className="rounded bg-white/5 px-2 py-0.5 font-mono text-[9px] uppercase text-[#a89f91] hover:bg-white/10"
         >
           clear
         </button>
         <span className="ml-auto font-mono text-[9px] text-[#a89f91]/60">
-          {track.notes.length} notes · click a cell to place · click a note to grow it
+          {track.notes.length} notes · click a cell to place · click a note to select it
         </span>
       </div>
 
@@ -340,7 +578,7 @@ function PianoRoll({
                     return (
                       <button
                         key={step}
-                        onClick={() => toggleNote(step, pitch)}
+                        onClick={() => onCellClick(step, pitch)}
                         disabled={covered}
                         aria-label={`${pitchName(pitch)} step ${step + 1}${n ? " on" : ""}`}
                         className={cn(
@@ -357,11 +595,15 @@ function PianoRoll({
                 </div>
                 {rowNotes.map((n) => {
                   const span = Math.min(n.len, STEP_COUNT - n.step);
+                  const selected = selNote?.id === n.id;
                   return (
                     <button
                       key={n.id}
-                      onClick={(e) => cycleNoteLen(n, e.shiftKey)}
-                      className="absolute inset-y-0 z-10 flex items-center overflow-hidden rounded-[3px] px-1 transition-shadow hover:shadow-[0_0_0_1px_#f2a43a]"
+                      onClick={(e) => onNoteClick(n, e.shiftKey)}
+                      className={cn(
+                        "absolute inset-y-0 z-10 flex items-center overflow-hidden rounded-[3px] px-1 transition-shadow hover:shadow-[0_0_0_1px_#f2a43a]",
+                        selected && "ring-2 ring-[#f2a43a]"
+                      )}
                       style={{
                         left: `${(n.step * 100) / STEP_COUNT}%`,
                         width: `calc(${(span * 100) / STEP_COUNT}% - 2px)`,
@@ -369,11 +611,18 @@ function PianoRoll({
                         opacity: track.muted ? 0.35 : 0.55 + n.vel * 0.45,
                         boxShadow: `inset 0 0 0 1px ${track.color}`,
                       }}
-                      title={`${pitchName(pitch)} · ${n.len} step${n.len > 1 ? "s" : ""} — click to grow, shift+click to remove`}
-                      aria-label={`${pitchName(pitch)} note at step ${n.step + 1}, length ${n.len}`}
+                      title={`${pitchName(pitch)} · ${n.len} step${n.len > 1 ? "s" : ""} — click to select, click again to grow, shift+click to remove`}
+                      aria-label={`${pitchName(pitch)} note at step ${n.step + 1}, length ${n.len}${selected ? ", selected" : ""}`}
+                      aria-pressed={selected}
                     >
                       {n.len >= 4 && (
                         <span className="w-full text-left font-mono text-[7px] font-bold text-black/55">{n.len}</span>
+                      )}
+                      {hasNoteFx(n) && (
+                        <span
+                          aria-hidden
+                          className="absolute right-0.5 top-0.5 h-1 w-1 rounded-full bg-[#c084fc]"
+                        />
                       )}
                     </button>
                   );
@@ -383,8 +632,56 @@ function PianoRoll({
           );
         })}
       </div>
+
+      {/* NOTE FX bar — velocity / probability / ratchet / nudge / bend */}
+      {selNote && (
+        <div className="mt-2 flex flex-wrap items-center gap-3 rounded-xl border border-white/8 bg-black/30 p-2.5">
+          <span className="font-mono text-[9px] uppercase tracking-widest text-[#f2a43a]">
+            Note FX · {pitchName(selNote.pitch)}
+          </span>
+          <MiniSlider
+            label="Vel"
+            value={selNote.vel}
+            min={0}
+            max={1}
+            step={0.01}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onChange={(v) => patchNote({ vel: v })}
+          />
+          <MiniSlider
+            label="Chance %"
+            value={(selNote.chance ?? 1) * 100}
+            min={0}
+            max={100}
+            step={1}
+            format={(v) => `${Math.round(v)}%`}
+            onChange={(v) => patchNote({ chance: v / 100 })}
+          />
+          <Ratchet value={selNote.rat ?? 1} onChange={(r) => patchNote({ rat: r })} />
+          <MiniSlider
+            label="Nudge"
+            value={selNote.nudge ?? 0}
+            min={-0.5}
+            max={0.5}
+            step={0.125}
+            format={fmtNudge}
+            onChange={(v) => patchNote({ nudge: v })}
+          />
+          <MiniSlider
+            label="Bend"
+            value={selNote.bend ?? 0}
+            min={-12}
+            max={12}
+            step={1}
+            format={fmtBend}
+            onChange={(v) => patchNote({ bend: Math.round(v) })}
+          />
+          <BarClose label="Deselect note" onClick={() => setSelectedNoteId(null)} />
+        </div>
+      )}
+
       <div className="mt-1 text-center font-mono text-[9px] tracking-wide text-[#a89f91]/60">
-        CLICK EMPTY CELL = PLACE · CLICK NOTE = GROW (1→2→4→8→16) · SHIFT+CLICK NOTE = REMOVE
+        CLICK EMPTY CELL = PLACE · CLICK NOTE = SELECT, AGAIN = GROW (1→2→4→8→16) · SHIFT+CLICK = REMOVE
       </div>
     </div>
   );

@@ -83,10 +83,10 @@ function DeviceBody({
       tracks: p.tracks.map((t) => (t.id === track.id ? ({ ...t, ...u } as Track) : t)),
     }));
 
-  const num = (label: string, key: keyof Track, min: number, max: number, step: number, fmt?: (v: number) => string) => (
+  const num = (label: string, key: string, min: number, max: number, step: number, fmt?: (v: number) => string) => (
     <Param
       label={label}
-      value={Number(track[key])}
+      value={Number((track as unknown as Record<string, unknown>)[key])}
       min={min}
       max={max}
       step={step}

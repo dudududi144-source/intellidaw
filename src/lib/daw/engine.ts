@@ -4,9 +4,9 @@
 /*  offline WAV rendering.                                             */
 /* ------------------------------------------------------------------ */
 
-import type { DrumSound, Note, Project, SynthTrack, Waveform } from "./types";
+import type { BusName, DrumSound, LiveFxState, Note, Project, SynthTrack, Waveform } from "./types";
 import { SONG_BARS, sectionAtBar } from "./types";
-import { getSkaziChainFor, refreshSkaziChain, type SkaziChain } from "./skaziAudio";
+import { getSkaziChainFor, refreshSkaziChain, shaperCurve, type SkaziChain } from "./skaziAudio";
 import { scheduleSkaziVoice, acidNote, bambaRiser, type VoiceParams } from "./skaziAudio";
 import { skaziStore } from "./skazi";
 import { cachedImpulse, cachedNoise, jitterRate } from "./noise";
@@ -66,6 +66,8 @@ export interface DrumVoiceOpts {
   vel: number;
   tune: number;
   customBuf?: AudioBuffer | null;
+  /** scales every decay in the voice (0.35 = tight, 1.6 = long) */
+  decayMul?: number;
 }
 
 /** per-voice tanh saturator — gives synthesized drums body instead of a
@@ -135,6 +137,7 @@ export function scheduleDrum(
   opts: DrumVoiceOpts
 ) {
   const { tune, customBuf } = opts;
+  const dm = opts.decayMul ?? 1;
   const trim = DRUM_TRIM[sound] ?? 0.8;
   const vel = opts.vel * trim;
   if (customBuf) {
@@ -157,7 +160,7 @@ export function scheduleDrum(
       const punchy = sound === "kick";
       const f0 = punchy ? 150 : 118;
       const f1 = punchy ? 43 : 35;
-      const dur = punchy ? 0.52 : 0.72;
+      const dur = (punchy ? 0.52 : 0.72) * dm;
       const o = ctx.createOscillator();
       o.type = "sine";
       o.frequency.setValueAtTime(f0 * rate, time);
@@ -188,16 +191,16 @@ export function scheduleDrum(
       const sat = satNode(ctx, 1.5);
       const bg = ctx.createGain();
       bg.gain.setValueAtTime(vel * 0.55, time);
-      bg.gain.exponentialRampToValueAtTime(0.001, time + 0.19);
+      bg.gain.exponentialRampToValueAtTime(0.001, time + 0.19 * dm);
       sat.connect(bg).connect(dest);
       [186, 255].forEach((f) => {
         const o = ctx.createOscillator();
         o.type = "triangle";
         o.frequency.setValueAtTime(f * rate, time);
-        o.frequency.exponentialRampToValueAtTime(f * 0.86 * rate, time + 0.1);
+        o.frequency.exponentialRampToValueAtTime(f * 0.86 * rate, time + 0.1 * dm);
         o.connect(sat);
         o.start(time);
-        o.stop(time + 0.24);
+        o.stop(time + 0.24 * dm);
       });
       // crack: bright noise riding above the body (kept under the body
       // level so the snare reads fat, not hissy)
@@ -206,7 +209,7 @@ export function scheduleDrum(
       hp.frequency.value = 1150 * rate;
       const ng = ctx.createGain();
       ng.gain.setValueAtTime(vel * 0.48, time);
-      ng.gain.exponentialRampToValueAtTime(0.001, time + 0.18);
+      ng.gain.exponentialRampToValueAtTime(0.001, time + 0.18 * dm);
       startNoise(ctx, hp, 0.3, time);
       hp.connect(ng).connect(dest);
       break;
@@ -227,13 +230,13 @@ export function scheduleDrum(
         g.gain.exponentialRampToValueAtTime(vel * 0.1, t0 + 0.01);
       }
       g.gain.setValueAtTime(vel * 0.62, time + 0.033);
-      g.gain.exponentialRampToValueAtTime(0.001, time + 0.033 + 0.19);
+      g.gain.exponentialRampToValueAtTime(0.001, time + 0.033 + 0.19 * dm);
       startNoise(ctx, f, 0.25, time);
       break;
     }
     case "chat":
     case "ohat": {
-      const dur = sound === "chat" ? 0.055 : 0.42;
+      const dur = (sound === "chat" ? 0.055 : 0.42) * dm;
       metal(ctx, dest, time, dur, vel * (sound === "chat" ? 0.5 : 0.42), rate);
       break;
     }
@@ -244,13 +247,13 @@ export function scheduleDrum(
       o.frequency.exponentialRampToValueAtTime(300 * rate, time + 0.07);
       const g = ctx.createGain();
       g.gain.setValueAtTime(vel * 0.4, time);
-      g.gain.exponentialRampToValueAtTime(0.001, time + 0.09);
+      g.gain.exponentialRampToValueAtTime(0.001, time + 0.09 * dm);
       const f = ctx.createBiquadFilter();
       f.type = "bandpass";
       f.frequency.value = 900 * rate;
       o.connect(f).connect(g).connect(dest);
       o.start(time);
-      o.stop(time + 0.15);
+      o.stop(time + 0.15 * dm);
       break;
     }
     case "rim": {
@@ -259,7 +262,7 @@ export function scheduleDrum(
       o.frequency.value = 1750 * rate;
       const g = ctx.createGain();
       g.gain.setValueAtTime(vel * 0.5, time);
-      g.gain.exponentialRampToValueAtTime(0.001, time + 0.045);
+      g.gain.exponentialRampToValueAtTime(0.001, time + 0.045 * dm);
       const nf = ctx.createBiquadFilter();
       nf.type = "bandpass";
       nf.frequency.value = 3600 * rate;
@@ -279,13 +282,13 @@ export function scheduleDrum(
       const o = ctx.createOscillator();
       o.type = "sine";
       o.frequency.setValueAtTime(f0 * rate, time);
-      o.frequency.exponentialRampToValueAtTime(f0 * 0.55 * rate, time + 0.18);
+      o.frequency.exponentialRampToValueAtTime(f0 * 0.55 * rate, time + 0.18 * dm);
       const g = ctx.createGain();
       g.gain.setValueAtTime(vel * 0.85, time);
-      g.gain.exponentialRampToValueAtTime(0.001, time + (sound === "tom" ? 0.3 : 0.16));
+      g.gain.exponentialRampToValueAtTime(0.001, time + (sound === "tom" ? 0.3 : 0.16) * dm);
       o.connect(g).connect(dest);
       o.start(time);
-      o.stop(time + 0.4);
+      o.stop(time + 0.4 * dm);
       break;
     }
     case "shaker": {
@@ -295,7 +298,7 @@ export function scheduleDrum(
       const g = ctx.createGain();
       g.gain.setValueAtTime(0.001, time);
       g.gain.linearRampToValueAtTime(vel * 0.4, time + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.001, time + 0.1);
+      g.gain.exponentialRampToValueAtTime(0.001, time + 0.1 * dm);
       startNoise(ctx, f, 0.2, time);
       f.connect(g).connect(dest);
       break;
@@ -303,7 +306,7 @@ export function scheduleDrum(
     case "ride":
     case "crash": {
       // shimmer noise bed + the metallic bank = believable cymbal wash
-      const dur = sound === "ride" ? 0.9 : 1.7;
+      const dur = (sound === "ride" ? 0.9 : 1.7) * dm;
       const f = ctx.createBiquadFilter();
       f.type = "highpass";
       f.frequency.value = sound === "ride" ? 6800 : 4200;
@@ -323,14 +326,14 @@ export function scheduleDrum(
       const f = ctx.createBiquadFilter();
       f.type = "lowpass";
       f.frequency.setValueAtTime(3600 * rate, time);
-      f.frequency.exponentialRampToValueAtTime(500, time + 0.12);
+      f.frequency.exponentialRampToValueAtTime(500, time + 0.12 * dm);
       f.Q.value = 6;
       const g = ctx.createGain();
       g.gain.setValueAtTime(vel * 0.5, time);
-      g.gain.exponentialRampToValueAtTime(0.001, time + 0.14);
+      g.gain.exponentialRampToValueAtTime(0.001, time + 0.14 * dm);
       o.connect(f).connect(g).connect(dest);
       o.start(time);
-      o.stop(time + 0.2);
+      o.stop(time + 0.2 * dm);
       break;
     }
     case "vox": {
@@ -341,7 +344,7 @@ export function scheduleDrum(
       const g = ctx.createGain();
       g.gain.setValueAtTime(0.001, time);
       g.gain.linearRampToValueAtTime(vel * 0.5, time + 0.03);
-      g.gain.exponentialRampToValueAtTime(0.001, time + 0.28);
+      g.gain.exponentialRampToValueAtTime(0.001, time + 0.28 * dm);
       [[700, 1], [1220, 0.5], [2600, 0.25]].forEach(([fr, amp]) => {
         const f = ctx.createBiquadFilter();
         f.type = "bandpass";
@@ -395,7 +398,8 @@ export function scheduleSynth(
   pitch: number,
   vel: number,
   time: number,
-  durSec: number
+  durSec: number,
+  fx?: { bend?: number }
 ) {
   const freq = midiHz(pitch + p.octave * 12);
   const g = ctx.createGain();
@@ -431,7 +435,13 @@ export function scheduleSynth(
     const o = ctx.createOscillator();
     o.type = type;
     const target = freq * freqMult;
-    if (p.glide) {
+    const bend = fx?.bend ?? 0;
+    if (bend !== 0) {
+      // pitch slide-in from N semitones away (note FX "bend")
+      const from = Math.max(20, target * Math.pow(2, -bend / 12));
+      o.frequency.setValueAtTime(from, time);
+      o.frequency.exponentialRampToValueAtTime(Math.max(20, target), time + Math.min(0.35, Math.max(0.06, durSec * 0.6)));
+    } else if (p.glide) {
       o.frequency.setValueAtTime(target * Math.pow(2, -2 / 12), time);
       o.frequency.exponentialRampToValueAtTime(Math.max(20, target), time + 0.06);
     } else {
@@ -481,6 +491,15 @@ interface Graph {
   master: GainNode;
   drive: WaveShaperNode;
   filter: BiquadFilterNode;
+  /** group-bus summing (drums / bass / music) */
+  buses: Map<BusName, GainNode>;
+  /** master live crush (identity curve when off) */
+  crush: WaveShaperNode;
+  /** master stutter gate (gain automated by the scheduler) */
+  stutter: GainNode;
+  /** master tempo-synced echo (live FX delay) */
+  fxDelaySend: GainNode;
+  fxDelay: DelayNode;
   /** bus glue compressor (feeds the ceiling) */
   limiter: DynamicsCompressorNode;
   /** last node of the master chain (what touches the destination) */
@@ -491,7 +510,7 @@ interface Graph {
   delayNode: DelayNode;
 }
 
-function driveCurve(amount: number): Float32Array {
+function driveCurve(amount: number): Float32Array<ArrayBuffer> {
   // cached: the curve is rebuilt on every live-drive slider move
   const key = Math.round(amount * 200);
   const hit = driveCurves.get(key);
@@ -506,12 +525,12 @@ function driveCurve(amount: number): Float32Array {
   driveCurves.set(key, curve);
   return curve;
 }
-const driveCurves = new Map<number, Float32Array>();
+const driveCurves = new Map<number, Float32Array<ArrayBuffer>>();
 
 /** linear below ±0.86, smooth sine knee to ±1 — a ceiling that never adds
     gain and never distorts at normal levels (cached once) */
-let _ceiling: Float32Array | null = null;
-function ceilingCurve(): Float32Array {
+let _ceiling: Float32Array<ArrayBuffer> | null = null;
+function ceilingCurve(): Float32Array<ArrayBuffer> {
   if (_ceiling) return _ceiling;
   const n = 1024;
   const c = new Float32Array(n);
@@ -529,6 +548,7 @@ function ceilingCurve(): Float32Array {
 }
 
 function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Graph {
+  const spb = 60 / project.bpm;
   const master = ctx.createGain();
   master.gain.value = volGain(project.masterVolume);
 
@@ -549,7 +569,33 @@ function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Gra
   rumble.type = "highpass";
   rumble.frequency.value = 24;
   rumble.Q.value = 0.6;
-  filter.connect(rumble);
+
+  // live crush sits after the filter, before the stutter gate
+  const crush = ctx.createWaveShaper();
+  crush.curve = identityCurve();
+  crush.oversample = "2x";
+  const stutter = ctx.createGain();
+  stutter.gain.value = 1;
+  filter.connect(crush);
+  crush.connect(stutter);
+  stutter.connect(rumble);
+
+  // master echo: tempo-synced feedback delay fed from the filtered mix
+  const fxDelaySend = ctx.createGain();
+  fxDelaySend.gain.value = 0;
+  const fxDelay = ctx.createDelay(2);
+  fxDelay.delayTime.value = spb * 0.75;
+  const fxFb = ctx.createGain();
+  fxFb.gain.value = 0.42;
+  const fxTone = ctx.createBiquadFilter();
+  fxTone.type = "lowpass";
+  fxTone.frequency.value = 3200;
+  filter.connect(fxDelaySend);
+  fxDelaySend.connect(fxDelay);
+  fxDelay.connect(fxTone);
+  fxTone.connect(fxFb);
+  fxFb.connect(fxDelay);
+  fxTone.connect(crush);
 
   // bus glue: 2–3 dB of slow leveling that never pumps. The old chain
   // (−4dB / 12:1 limiter + fixed make-up gain) compressed 24/7, which is
@@ -593,7 +639,6 @@ function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Gra
   tail.connect(ctx.destination);
 
   // shared FX buses
-  const spb = 60 / project.bpm;
   const delayIn = ctx.createGain();
   const delay = ctx.createDelay(2);
   delay.delayTime.value = spb * 0.75; // dotted 8th
@@ -619,6 +664,14 @@ function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Gra
   revTone.connect(master);
 
   const channels: Map<string, Channel> = new Map();
+  // group buses: channels sum into drums / bass / music before the master
+  const buses: Map<BusName, GainNode> = new Map();
+  for (const name of ["drums", "bass", "music"] as BusName[]) {
+    const g = ctx.createGain();
+    g.gain.value = 1;
+    g.connect(master);
+    buses.set(name, g);
+  }
   const anySolo = project.tracks.some((t) => t.solo);
   for (const t of project.tracks) {
     const input = ctx.createGain();
@@ -645,7 +698,7 @@ function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Gra
     eqMid.connect(eqHigh);
     eqHigh.connect(pan);
     pan.connect(gain);
-    gain.connect(master);
+    gain.connect(buses.get(t.bus ?? "music") ?? master);
 
     const delaySend = ctx.createGain();
     delaySend.gain.value = t.delaySend;
@@ -659,7 +712,17 @@ function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Gra
 
     channels.set(t.id, { input, eqLow, eqMid, eqHigh, pan, gain, delaySend, reverbSend });
   }
-  return { master, drive, filter, limiter: glue, tail, channels, delayIn, reverbIn, delayNode: delay };
+  return { master, drive, filter, buses, crush, stutter, fxDelaySend, fxDelay, limiter: glue, tail, channels, delayIn, reverbIn, delayNode: delay };
+}
+
+let _identity: Float32Array<ArrayBuffer> | null = null;
+function identityCurve(): Float32Array<ArrayBuffer> {
+  if (_identity) return _identity;
+  const n = 1024;
+  const c = new Float32Array(n);
+  for (let i = 0; i < n; i++) c[i] = (i / (n - 1)) * 2 - 1;
+  _identity = c;
+  return c;
 }
 
 const graphExtras: { masterAnalyser?: AnalyserNode } = {};
@@ -679,7 +742,7 @@ function currentSkaziStateSnapshot() {
   try {
     return skaziStore.get();
   } catch {
-    return { instruments: {}, fx: {}, seq: {}, godSeed: 1 };
+    return { instruments: {}, fx: {}, seq: {}, godSeed: 1 } as ReturnType<typeof skaziStore.get>;
   }
 }
 
@@ -701,6 +764,11 @@ export class DawEngine {
   private previewBus: GainNode | null = null;
   playing = false;
   metronome = false;
+  /** timestamp until which the count-in clicks run (0 = none) */
+  countInUntil = 0;
+  get countingIn() {
+    return !!this.ctx && this.countInUntil > this.ctx.currentTime;
+  }
   /** fires with the absolute step (0..SONG_BARS*16-1, or -1 when stopped) */
   onStep: ((step: number) => void) | null = null;
 
@@ -741,6 +809,7 @@ export class DawEngine {
     this.project = project;
     const ctx = await this.ensure();
     refreshSkaziChain(project.bpm);
+    this.applyLiveFx(project.liveFx);
     if (!this.graph) {
       this.graph = buildGraph(ctx, project, true);
     } else {
@@ -795,8 +864,20 @@ export class DawEngine {
     }
     if (this.playing) this.stop();
     this.playing = true;
-    this.absStep = 0;
-    this.nextStepTime = this.ctx.currentTime + 0.06;
+    const startStep =
+      project.loopOn && project.loopEnd > project.loopStart ? project.loopStart * 16 : 0;
+    this.absStep = startStep;
+    const spb = 60 / project.bpm;
+    if (project.countIn) {
+      // four clicks, then the transport rolls
+      const base = this.ctx.currentTime + 0.06;
+      for (let i = 0; i < 4; i++) this.click(base + i * spb, i === 0);
+      this.nextStepTime = base + 4 * spb;
+      this.countInUntil = base + 4 * spb;
+    } else {
+      this.nextStepTime = this.ctx.currentTime + 0.06;
+      this.countInUntil = 0;
+    }
     this.queue = [];
     this.tick();
     this.startTimer();
@@ -862,22 +943,45 @@ export class DawEngine {
     const spb = 60 / p.bpm;
     const stepDur = spb / 4;
     const loopSteps = SONG_BARS * 16;
+    const loopA = p.loopOn ? Math.max(0, p.loopStart) * 16 : 0;
+    const loopB = p.loopOn ? Math.min(SONG_BARS, Math.max(p.loopStart + 1, p.loopEnd)) * 16 : loopSteps;
     // the context may have been suspended (tab sleep, device lock) —
     // resync ahead instead of dumping a burst of stale steps at once
     if (this.nextStepTime < this.ctx.currentTime - 0.12) {
       this.nextStepTime = this.ctx.currentTime + 0.06;
     }
     while (this.nextStepTime < this.ctx.currentTime + LOOKAHEAD_S) {
-      const abs = this.absStep % loopSteps;
+      let abs = this.absStep;
+      if (p.loopOn) {
+        if (abs < loopA || abs >= loopB) abs = loopA; // seek landed outside — pull into the loop
+      } else {
+        abs = abs % loopSteps;
+      }
       const step = abs % 16;
       const bar = Math.floor(abs / 16);
       const swingOffset = step % 2 === 1 ? p.swing * stepDur * 0.5 : 0;
       const time = this.nextStepTime + swingOffset;
       this.scheduleStep(p, this.graph!, step, bar, time, stepDur);
       if (this.metronome) this.click(time, step === 0);
+      // stutter gate: dip the master on the off-8ths, depth = liveFx.stutter
+      const st = p.liveFx?.stutter ?? 0;
+      if (st > 0 && this.graph) {
+        const g = this.graph.stutter.gain;
+        const depth = Math.min(0.96, st);
+        if (step % 2 === 1) {
+          g.setValueAtTime(1 - depth, time);
+          g.setValueAtTime(1, time + stepDur / 2);
+        } else {
+          g.setValueAtTime(1, time);
+        }
+      }
       this.queue.push({ step: abs, time });
       this.nextStepTime += stepDur;
-      this.absStep++;
+      if (p.loopOn) {
+        this.absStep = this.absStep + 1 >= loopB ? loopA : this.absStep + 1;
+      } else {
+        this.absStep++;
+      }
     }
   }
 
@@ -899,7 +1003,14 @@ export class DawEngine {
   /** jump the transport to an absolute step (quantised scenes / loop seek) */
   jumpTo(absStep: number) {
     if (!this.ctx) return;
-    this.absStep = Math.max(0, Math.floor(absStep));
+    let s = Math.max(0, Math.floor(absStep));
+    const p = this.project;
+    if (p?.loopOn && p.loopEnd > p.loopStart) {
+      const a = p.loopStart * 16;
+      const b = p.loopEnd * 16;
+      if (s < a || s >= b) s = a;
+    }
+    this.absStep = s;
     this.nextStepTime = this.ctx.currentTime + 0.05;
     this.queue = [];
   }
@@ -925,27 +1036,65 @@ export class DawEngine {
       if (t.kind === "drum") {
         const s = t.steps[step];
         if (s?.on) {
-          scheduleDrum(ctx, ch.input, t.sound, time, {
-            vel: s.vel,
-            tune: t.tune,
-            customBuf: this.customFor(t.sound),
-          });
+          const chance = s.chance ?? 1;
+          if (chance >= 1 || Math.random() < chance) {
+            const rat = Math.max(1, Math.min(4, Math.round(s.rat ?? 1)));
+            for (let i = 0; i < rat; i++) {
+              const sub = stepDur / rat;
+              this.noteVoice();
+              scheduleDrum(ctx, ch.input, t.sound, time + i * sub, {
+                vel: s.vel * Math.pow(0.82, i),
+                tune: t.tune - (s.thr ?? 0) * 4 * i,
+                customBuf: this.customFor(t.sound),
+                decayMul: Math.max(0.3, Math.min(1.6, s.dec ?? 1)),
+              });
+            }
+            if (t.sound === "kick" || t.sound === "kick2") {
+              this.duckOthers(p, graph, t.id, time);
+            }
+          }
         }
       } else {
         for (const n of t.notes) {
           if (n.step === step) {
-            scheduleSynth(
-              ctx,
-              ch.input,
-              t as SynthTrack,
-              n.pitch,
-              n.vel,
-              time,
-              n.len * stepDur
-            );
+            const chance = n.chance ?? 1;
+            if (chance < 1 && Math.random() >= chance) continue;
+            const rat = Math.max(1, Math.min(4, Math.round(n.rat ?? 1)));
+            const nudge = (n.nudge ?? 0) * stepDur;
+            for (let i = 0; i < rat; i++) {
+              const subDur = Math.min(n.len * stepDur - i * stepDur, stepDur * 0.96);
+              if (subDur <= 0.02) break;
+              this.noteVoice();
+              scheduleSynth(
+                ctx,
+                ch.input,
+                t as SynthTrack,
+                n.pitch,
+                n.vel * Math.pow(0.85, i),
+                time + nudge + i * stepDur,
+                subDur,
+                { bend: n.bend ?? 0 }
+              );
+            }
           }
         }
       }
+    }
+  }
+
+  /** PITAPUMP-style sidechain: every channel with duck>0 dips while the
+      kick speaks, then eases back — scheduled ahead like everything else */
+  private duckOthers(p: Project, graph: Graph, kickTrackId: string, time: number) {
+    const anySolo = p.tracks.some((t) => t.solo);
+    for (const tr of p.tracks) {
+      const depth = tr.duck ?? 0;
+      if (depth <= 0 || tr.id === kickTrackId) continue;
+      const ch = graph.channels.get(tr.id);
+      if (!ch) continue;
+      const base = !tr.muted && (!anySolo || tr.solo) ? volGain(tr.volume) : 0;
+      const g = ch.gain.gain;
+      g.setTargetAtTime(base * (1 - 0.78 * Math.min(1, depth)), time, 0.006);
+      g.setTargetAtTime(base, time + 0.1, 0.08);
     }
   }
 
@@ -971,6 +1120,69 @@ export class DawEngine {
   setLiveDrive(amount: number) {
     if (!this.ctx || !this.graph) return;
     this.graph.drive.curve = driveCurve(Math.min(1, Math.max(0, amount)) * 0.5);
+  }
+
+  setLiveCrush(amount: number) {
+    if (!this.ctx || !this.graph) return;
+    const a = Math.min(1, Math.max(0, amount));
+    this.graph.crush.curve = a <= 0.001 ? identityCurve() : shaperCurve("crush", 0.18 + 0.82 * a);
+  }
+
+  setLiveDelay(amount: number) {
+    if (!this.ctx || !this.graph) return;
+    const a = Math.min(1, Math.max(0, amount));
+    this.graph.fxDelaySend.gain.setTargetAtTime(a * 0.55, this.ctx.currentTime, 0.05);
+    if (this.project) {
+      this.graph.fxDelay.delayTime.setTargetAtTime((60 / this.project.bpm) * 0.75, this.ctx.currentTime, 0.08);
+    }
+  }
+
+  /** apply a whole LiveFxState at once (project load / sync) */
+  applyLiveFx(fx: Partial<LiveFxState> | undefined) {
+    if (!fx) return;
+    this.setLiveFilter(fx.filter ?? 1);
+    this.setLiveDrive(fx.drive ?? 0);
+    this.setLiveCrush(fx.crush ?? 0);
+    this.setLiveDelay(fx.delay ?? 0);
+  }
+
+  /* ---- metering: live LUFS + CPU estimate ---- */
+
+  private lufsBuf = new Float32Array(1024);
+  private rmsWindow: Array<{ t: number; ms: number }> = [];
+
+  /** rolling integrated loudness (approx LUFS) of the live master */
+  masterLufs(): number {
+    const a = graphExtras.masterAnalyser;
+    if (!a || !this.ctx) return -70;
+    a.getFloatTimeDomainData(this.lufsBuf);
+    let sum = 0;
+    for (let i = 0; i < this.lufsBuf.length; i++) sum += this.lufsBuf[i] * this.lufsBuf[i];
+    const ms = sum / this.lufsBuf.length;
+    const now = this.ctx.currentTime;
+    this.rmsWindow.push({ t: now, ms });
+    while (this.rmsWindow.length && now - this.rmsWindow[0].t > 3) this.rmsWindow.shift();
+    let acc = 0;
+    for (const w of this.rmsWindow) acc += w.ms;
+    const mean = acc / Math.max(1, this.rmsWindow.length);
+    if (mean <= 1e-8) return -70;
+    return -0.691 + 10 * Math.log10(mean);
+  }
+
+  private voiceTimes: number[] = [];
+  private noteVoice() {
+    if (this.ctx) {
+      this.voiceTimes.push(this.ctx.currentTime);
+      if (this.voiceTimes.length > 512) this.voiceTimes.splice(0, this.voiceTimes.length - 512);
+    }
+  }
+
+  /** rough CPU load estimate from scheduled-voice density (0..100) */
+  cpuEstimate(): number {
+    if (!this.ctx) return 0;
+    const now = this.ctx.currentTime;
+    this.voiceTimes = this.voiceTimes.filter((t) => now - t < 1);
+    return Math.min(96, Math.round(this.voiceTimes.length * 1.9));
   }
 
   /* ---- preview one-shots (pads, piano keys, landing) ---- */
@@ -1010,6 +1222,115 @@ export class DawEngine {
     const ctx = await this.ensure();
     const dest = await this.previewDest();
     scheduleSynth(ctx, dest, p, pitch, vel, ctx.currentTime + 0.01, durSec);
+  }
+
+  /** performance keyboard / MIDI: play a note on a track through its own channel */
+  async playNoteLive(trackId: string, pitch: number, vel = 0.9, durSec = 0.5) {
+    const ctx = await this.ensure();
+    const p = this.project;
+    const ch = this.graph?.channels.get(trackId);
+    const t = p?.tracks.find((x) => x.id === trackId);
+    if (!ch || !t || t.kind !== "synth") {
+      // fall back to a dry preview so keys always make sound
+      if (t && t.kind === "drum") {
+        const pad = p?.pads.find((pd) => pd.sound === t.sound);
+        await this.previewDrum(t.sound, vel, t.tune, pad?.custom?.dataUrl ?? null);
+      }
+      return;
+    }
+    scheduleSynth(ctx, ch.input, t, pitch, vel, ctx.currentTime + 0.01, durSec);
+  }
+
+  /* ---- Web MIDI in ---- */
+
+  midiStatus: "off" | "on" | "none" = "off";
+
+  async enableMidi(): Promise<"on" | "none"> {
+    const nav = navigator as unknown as {
+      requestMIDIAccess?: () => Promise<{
+        inputs: Map<string, { onmidimessage: ((e: { data: Uint8Array | null }) => void) | null }>;
+      }>;
+    };
+    if (!nav.requestMIDIAccess) {
+      this.midiStatus = "none";
+      return "none";
+    }
+    try {
+      const access = await nav.requestMIDIAccess();
+      access.inputs.forEach((input) => {
+        input.onmidimessage = (e) => {
+          const data = e.data;
+          if (!data || data.length < 2) return;
+          const cmd = data[0] & 0xf0;
+          if (cmd === 0x90 && data[2] > 0) {
+            const p = this.project;
+            const t = p?.tracks.find((x) => x.kind === "synth");
+            if (t) void this.playNoteLive(t.id, data[1], Math.min(1, data[2] / 110));
+          }
+        };
+      });
+      this.midiStatus = "on";
+      return "on";
+    } catch {
+      this.midiStatus = "none";
+      return "none";
+    }
+  }
+
+  /* ---- audio recording (REC AUDIO → WAV data URL, pads/import) ---- */
+
+  private recorder: MediaRecorder | null = null;
+  private recStreamDest: MediaStreamAudioDestinationNode | null = null;
+  private recChunks: Blob[] = [];
+  recording = false;
+
+  startRecording(): boolean {
+    if (!this.ctx || !this.graph || typeof MediaRecorder === "undefined") return false;
+    try {
+      if (!this.recStreamDest) {
+        this.recStreamDest = this.ctx.createMediaStreamDestination();
+        this.graph.tail.connect(this.recStreamDest);
+      }
+      this.recChunks = [];
+      const rec = new MediaRecorder(this.recStreamDest.stream);
+      rec.ondataavailable = (e) => {
+        if (e.data.size) this.recChunks.push(e.data);
+      };
+      rec.start();
+      this.recorder = rec;
+      this.recording = true;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** stop and return the capture as a WAV data URL (loadable into a pad) */
+  stopRecording(): Promise<string | null> {
+    return new Promise((resolve) => {
+      const rec = this.recorder;
+      if (!rec || !this.ctx) {
+        resolve(null);
+        return;
+      }
+      rec.onstop = async () => {
+        this.recording = false;
+        this.recorder = null;
+        try {
+          const blob = new Blob(this.recChunks, { type: "audio/webm" });
+          const arr = await blob.arrayBuffer();
+          const buf = await this.ctx!.decodeAudioData(arr);
+          const wavBlob = encodeWav(buf);
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(wavBlob);
+        } catch {
+          resolve(null);
+        }
+      };
+      rec.stop();
+    });
   }
 
   /* ---- SKAZI bundle previews (routed through the master FX chain) ---- */
@@ -1156,6 +1477,11 @@ export class DawEngine {
     return Math.min(1, peak * 1.4);
   }
 
+  /** the live master analyser (visualizer) — null until audio started */
+  masterAnalyser(): AnalyserNode | null {
+    return graphExtras.masterAnalyser ?? null;
+  }
+
   /* ---- offline render → WAV ---- */
 
   private async renderOffline(project: Project, bars: number, only?: string | null): Promise<AudioBuffer> {
@@ -1165,6 +1491,14 @@ export class DawEngine {
     const dur = totalSteps * stepDur + 1.8;
     const off = new OfflineAudioContext(2, Math.ceil(44100 * dur), 44100);
     const graph = buildGraph(off, project, false);
+    // bake the project's live FX into the export
+    if (project.liveFx) {
+      const fx = project.liveFx;
+      graph.filter.frequency.value = 60 * Math.pow(300, Math.min(1, Math.max(0, fx.filter ?? 1)));
+      graph.drive.curve = driveCurve((fx.drive ?? 0) * 0.5);
+      graph.crush.curve = (fx.crush ?? 0) <= 0.001 ? identityCurve() : shaperCurve("crush", 0.18 + 0.82 * (fx.crush ?? 0));
+      graph.fxDelaySend.gain.value = (fx.delay ?? 0) * 0.55;
+    }
     // decode user pad samples up-front so they are included in the render
     const padBufs = new Map<DrumSound, AudioBuffer | null>();
     for (const pad of project.pads) {
@@ -1181,6 +1515,14 @@ export class DawEngine {
       const section = sectionAtBar(project.sections, bar);
       const swingOffset = step % 2 === 1 ? project.swing * stepDur * 0.5 : 0;
       const time = t + swingOffset;
+      // deterministic RNG so an export with chance-steps always bakes the same take
+      const rnd = (() => {
+        let s = (i * 2654435761) % 4294967296;
+        return () => {
+          s = (s * 1664525 + 1013904223) % 4294967296;
+          return s / 4294967296;
+        };
+      })();
       for (const track of project.tracks) {
         if (only && track.id !== only) continue;
         const ch = graph.channels.get(track.id);
@@ -1191,16 +1533,49 @@ export class DawEngine {
         if (track.kind === "drum") {
           const s = track.steps[step];
           if (s?.on) {
-            scheduleDrum(off, ch.input, track.sound, time, {
-              vel: s.vel,
-              tune: track.tune,
-              customBuf: padBufs.get(track.sound) ?? null,
-            });
+            const chance = s.chance ?? 1;
+            if (chance >= 1 || rnd() < chance) {
+              const rat = Math.max(1, Math.min(4, Math.round(s.rat ?? 1)));
+              for (let k = 0; k < rat; k++) {
+                scheduleDrum(off, ch.input, track.sound, time + (k * stepDur) / rat, {
+                  vel: s.vel * Math.pow(0.82, k),
+                  tune: track.tune - (s.thr ?? 0) * 4 * k,
+                  customBuf: padBufs.get(track.sound) ?? null,
+                  decayMul: Math.max(0.3, Math.min(1.6, s.dec ?? 1)),
+                });
+              }
+              if (track.sound === "kick" || track.sound === "kick2") {
+                const anySoloLocal = project.tracks.some((x) => x.solo);
+                for (const tr of project.tracks) {
+                  if (only && tr.id !== only) continue;
+                  const depth = tr.duck ?? 0;
+                  if (depth <= 0 || tr.id === track.id) continue;
+                  const dch = graph.channels.get(tr.id);
+                  if (!dch) continue;
+                  const base =
+                    !tr.muted && (!anySoloLocal || tr.solo) && !(only && section?.mutes.includes(tr.id))
+                      ? volGain(tr.volume)
+                      : 0;
+                  dch.gain.gain.setTargetAtTime(base * (1 - 0.78 * Math.min(1, depth)), time, 0.006);
+                  dch.gain.gain.setTargetAtTime(base, time + 0.1, 0.08);
+                }
+              }
+            }
           }
         } else {
           for (const n of track.notes) {
             if (n.step === step) {
-              scheduleSynth(off, ch.input, track, n.pitch, n.vel, time, n.len * stepDur);
+              const chance = n.chance ?? 1;
+              if (chance < 1 && rnd() >= chance) continue;
+              const rat = Math.max(1, Math.min(4, Math.round(n.rat ?? 1)));
+              const nudge = (n.nudge ?? 0) * stepDur;
+              for (let k = 0; k < rat; k++) {
+                const subDur = Math.min(n.len * stepDur - k * stepDur, stepDur * 0.96);
+                if (subDur <= 0.02) break;
+                scheduleSynth(off, ch.input, track, n.pitch, n.vel * Math.pow(0.85, k), time + nudge + k * stepDur, subDur, {
+                  bend: n.bend ?? 0,
+                });
+              }
             }
           }
         }

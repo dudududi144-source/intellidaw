@@ -55,11 +55,28 @@ import { AssistantTabMemo } from "./AssistantTab";
 import { SkaziTab } from "./SkaziTab";
 import { PadsTab } from "./PadsTab";
 import { SessionTab as SessionTabMemo } from "./SessionTab";
+import { IdeasTab } from "./IdeasTab";
+import { HistoryTab } from "./HistoryTab";
+import { SoundsTab } from "./SoundsTab";
+import { LearnTab } from "./LearnTab";
+import { Visualizer } from "./Visualizer";
+import { PerfKeyboard } from "./PerfKeyboard";
 import { ExportDialog } from "./ExportDialog";
 import { ProjectsDrawer } from "./ProjectsDrawer";
 import { Meter } from "./ui";
 
-type View = "arrange" | "editor" | "pads" | "mixer" | "live" | "skazi" | "assistant";
+type View =
+  | "arrange"
+  | "editor"
+  | "pads"
+  | "mixer"
+  | "live"
+  | "ideas"
+  | "sounds"
+  | "history"
+  | "learn"
+  | "skazi"
+  | "assistant";
 
 const VIEWS: Array<{ id: View; label: string; icon: string; hint: string }> = [
   {
@@ -72,7 +89,7 @@ const VIEWS: Array<{ id: View; label: string; icon: string; hint: string }> = [
     id: "editor",
     label: "Notes",
     icon: "✎",
-    hint: "Click an empty cell to place · click a note to grow it · shift+click erases",
+    hint: "Click an on step to focus it → STEP FX (chance · ratchet · decay · throw) — click a note to select → NOTE FX",
   },
   {
     id: "pads",
@@ -84,18 +101,42 @@ const VIEWS: Array<{ id: View; label: string; icon: string; hint: string }> = [
     id: "mixer",
     label: "Mixer",
     icon: "⇵",
-    hint: "Balance levels · shape the EQ · send tracks to delay and reverb",
+    hint: "Balance levels · route to D/B/M buses · sidechain-duck from the kick · watch LUFS",
   },
   {
     id: "live",
     label: "Live",
     icon: "◉",
-    hint: "Press play, then launch sections and sweep the master FX in real time",
+    hint: "Launch sections while playing · sweep filter, drive, crush, echo and stutter",
+  },
+  {
+    id: "ideas",
+    label: "Ideas",
+    icon: "✦",
+    hint: "Pick a role + style → Generate writes a new track in your key · Mutate keeps the vibe",
+  },
+  {
+    id: "sounds",
+    label: "Sounds",
+    icon: "♫",
+    hint: "Audition every drum · apply kit presets · load any of the 16 genre templates",
+  },
+  {
+    id: "history",
+    label: "History",
+    icon: "⏱",
+    hint: "Click any state to jump back · save versions you want to keep",
+  },
+  {
+    id: "learn",
+    label: "Learn",
+    icon: "▣",
+    hint: "Four short lessons that show you where everything lives",
   },
   {
     id: "skazi",
     label: "SKAZI",
-    icon: "✦",
+    icon: "✧",
     hint: "19 extra devices — pick one, tweak it, drop its pattern onto a track",
   },
   {
@@ -132,8 +173,20 @@ export function Studio({ onClose }: { onClose: () => void }) {
   const [deviceSheet, setDeviceSheet] = useState(false);
   const [fxFilter, setFxFilter] = useState(1);
   const [fxDrive, setFxDrive] = useState(0);
+  const [visOpen, setVisOpen] = useState(false);
+  const [keysOpen, setKeysOpen] = useState(false);
+  const [kbOctave, setKbOctave] = useState(0);
+  const [recording, setRecording] = useState(false);
+  const [midiState, setMidiState] = useState<"off" | "on" | "none">("off");
+  const [cpu, setCpu] = useState(0);
   const stepRef = useRef<(s: number) => void>(() => {});
   const projectRef = useRef<Project | null>(project);
+
+  /* CPU badge polls the engine estimate twice a second */
+  useEffect(() => {
+    const id = setInterval(() => setCpu(getEngine().cpuEstimate()), 500);
+    return () => clearInterval(id);
+  }, []);
 
   /* ---------------- undo / redo ---------------- */
   const past = useRef<Project[]>([]);
@@ -141,8 +194,13 @@ export function Studio({ onClose }: { onClose: () => void }) {
   const prevRef = useRef<Project | null>(null);
   const skipHist = useRef(false);
   const [histLen, setHistLen] = useState({ past: 0, future: 0 });
+  const [histSnap, setHistSnap] = useState<{ past: Project[]; future: Project[] }>({ past: [], future: [] });
   const syncHistLen = useCallback(
-    () => setHistLen({ past: past.current.length, future: future.current.length }),
+    () =>
+      setHistLen({
+        past: past.current.length,
+        future: future.current.length,
+      }) || setHistSnap({ past: [...past.current], future: [...future.current] }),
     []
   );
 
@@ -256,6 +314,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
       setCurrentStep(-1);
       return;
     }
+    if (!project) return;
     try {
       setStarted(true);
       await e.sync(project);
@@ -356,7 +415,9 @@ export function Studio({ onClose }: { onClose: () => void }) {
         return;
       }
       if (k === "escape") {
-        if (deviceSheet) setDeviceSheet(false);
+        if (visOpen) setVisOpen(false);
+        else if (keysOpen) setKeysOpen(false);
+        else if (deviceSheet) setDeviceSheet(false);
         else if (!exportOpen && !projectsOpen) onClose();
         return;
       }
@@ -393,7 +454,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [view, togglePlay, toggleMetro, playPad, undo, redo, exportOpen, projectsOpen, deviceSheet, onClose]);
+  }, [view, togglePlay, toggleMetro, playPad, undo, redo, exportOpen, projectsOpen, deviceSheet, visOpen, keysOpen, onClose]);
 
   /* ---------------- assistant fixes ---------------- */
   const applyFix = useCallback(
@@ -434,6 +495,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
   );
 
   const saveNow = () => {
+    if (!project) return;
     const p = { ...project, updatedAt: Date.now() };
     setProject(p);
     saveProject(p);
@@ -487,6 +549,84 @@ export function Studio({ onClose }: { onClose: () => void }) {
 
   const getLevel = useCallback((id: string) => getEngine().level(id), []);
   const getMasterLevel = useCallback(() => getEngine().masterLevel(), []);
+  const getMasterLufs = useCallback(() => getEngine().masterLufs(), []);
+  const getCpu = useCallback(() => getEngine().cpuEstimate(), []);
+  const getAnalyser = useCallback(() => getEngine().masterAnalyser(), []);
+
+  /* ---------------- transport extras: loop · count-in · rec · markers · midi ---------------- */
+
+  const toggleLoop = useCallback(() => {
+    updateProject((p) => ({
+      ...p,
+      loopOn: !p.loopOn,
+      loopStart: p.loopOn ? 0 : p.loopStart,
+      loopEnd: p.loopOn ? SONG_BARS : Math.max(p.loopStart + 1, p.loopEnd),
+    }));
+  }, [updateProject]);
+
+  const loopSection = useCallback(
+    (startBar: number, endBar: number) => {
+      updateProject((p) => ({ ...p, loopOn: true, loopStart: startBar, loopEnd: endBar }));
+    },
+    [updateProject]
+  );
+
+  const toggleCountIn = useCallback(() => {
+    updateProject((p) => ({ ...p, countIn: !p.countIn }));
+  }, [updateProject]);
+
+  const toggleRec = useCallback(async () => {
+    const e = getEngine();
+    if (!recording) {
+      setStarted(true);
+      const ok = e.startRecording();
+      if (!ok) {
+        toast({ title: "Recording unavailable", description: "Start playback once, then try REC again — the browser needs an active audio context." });
+        return;
+      }
+      setRecording(true);
+      toast({ title: "Recording the master…", description: "Press REC again to capture a WAV into your first empty pad." });
+    } else {
+      const dataUrl = await e.stopRecording();
+      setRecording(false);
+      if (!dataUrl) {
+        toast({ title: "Recording failed", description: "Nothing was captured — make sure playback is running while you record." });
+        return;
+      }
+      updateProject((p) => {
+        const freeSlot = p.pads.find((pd) => !pd.custom);
+        if (!freeSlot) return p;
+        return {
+          ...p,
+          pads: p.pads.map((pd) => (pd.slot === freeSlot.slot ? { ...pd, custom: { name: `REC ${new Date().toLocaleTimeString()}`, dataUrl } } : pd)),
+        };
+      });
+      toast({ title: "Recording captured", description: "Saved as a WAV on the first empty pad — open Pads to play it." });
+    }
+  }, [recording, updateProject, toast]);
+
+  const addMarker = useCallback(() => {
+    const bar = currentStep >= 0 ? Math.floor(currentStep / 16) : 0;
+    updateProject((p) => ({
+      ...p,
+      markers: [...p.markers, { id: uid(), bar, name: `Mark ${p.markers.length + 1}` }].slice(-8),
+    }));
+  }, [currentStep, updateProject]);
+
+  const enableMidi = useCallback(async () => {
+    const r = await getEngine().enableMidi();
+    setMidiState(r);
+    toast(
+      r === "on"
+        ? { title: "MIDI connected", description: "Play your controller — notes land on the first synth track." }
+        : { title: "No MIDI here", description: "This browser/device has no Web MIDI — the on-screen keyboard works everywhere." }
+    );
+  }, [toast]);
+
+  /* restore from the History tab — stays undoable (the jump itself lands in the stack) */
+  const restoreState = useCallback((p: Project) => {
+    setProject(p);
+  }, []);
 
   if (!project || !project.tracks) {
     return (
@@ -541,9 +681,24 @@ export function Studio({ onClose }: { onClose: () => void }) {
         <PadsTab project={project} updateProject={updateProject} onPlayPad={playPadSlot} flashSlot={flashSlot} />
       )}
       {view === "mixer" && (
-        <MixerTab project={project} updateProject={updateProject} getLevel={getLevel} getMasterLevel={getMasterLevel} />
+        <MixerTab
+          project={project}
+          updateProject={updateProject}
+          getLevel={getLevel}
+          getMasterLevel={getMasterLevel}
+          getMasterLufs={getMasterLufs}
+          getCpu={getCpu}
+        />
       )}
-      {view === "live" && <SessionTabMemo project={project} currentStep={currentStep} playing={playing} />}
+      {view === "live" && (
+        <SessionTabMemo project={project} currentStep={currentStep} playing={playing} updateProject={updateProject} />
+      )}
+      {view === "ideas" && <IdeasTab project={project} updateProject={updateProject} onApplyFix={applyFix} />}
+      {view === "sounds" && <SoundsTab project={project} updateProject={updateProject} />}
+      {view === "history" && (
+        <HistoryTab project={project} updateProject={updateProject} past={histSnap.past} future={histSnap.future} onRestore={restoreState} />
+      )}
+      {view === "learn" && <LearnTab project={project} updateProject={updateProject} onApplyFix={applyFix} />}
       {view === "skazi" && <SkaziTab project={project} updateProject={updateProject} />}
       {view === "assistant" && <AssistantTabMemo project={project} onApplyFix={applyFix} />}
     </>
@@ -672,6 +827,31 @@ export function Studio({ onClose }: { onClose: () => void }) {
           </DropdownMenuContent>
         </DropdownMenu>
 
+        {/* MIDI in */}
+        <button
+          onClick={() => void enableMidi()}
+          className={cn(
+            "hidden h-8 items-center rounded-lg border px-2.5 font-mono text-[10px] uppercase tracking-wider md:flex",
+            midiState === "on"
+              ? "border-[#8fbf6b]/50 bg-[#8fbf6b]/15 text-[#8fbf6b]"
+              : "border-white/8 bg-black/30 text-[#a89f91] hover:text-[#f0ece4]"
+          )}
+          title={midiState === "on" ? "MIDI input connected — play your controller" : "Connect a MIDI keyboard (Web MIDI)"}
+        >
+          midi {midiState === "on" ? "●" : midiState === "none" ? "—" : ""}
+        </button>
+
+        {/* CPU estimate */}
+        <span
+          className={cn(
+            "hidden h-8 items-center rounded-lg border border-white/8 bg-black/30 px-2.5 font-mono text-[10px] uppercase tracking-wider lg:flex",
+            cpu > 70 ? "text-[#e5533d]" : "text-[#a89f91]"
+          )}
+          title="Estimated engine load from scheduled voices"
+        >
+          cpu {cpu}%
+        </span>
+
         <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
           <div className="flex items-center overflow-hidden rounded-lg border border-white/8">
             <button
@@ -758,6 +938,86 @@ export function Studio({ onClose }: { onClose: () => void }) {
           >
             ♩
           </button>
+          <button
+            onClick={toggleLoop}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-[12px] font-bold",
+              project.loopOn ? "bg-[#8fbf6b] text-[#10130a]" : "bg-white/5 text-[#a89f91] hover:bg-white/12"
+            )}
+            title={project.loopOn ? `Loop ON · bars ${project.loopStart + 1}–${project.loopEnd} (click to turn off)` : "Loop the whole song"}
+            aria-label="Toggle loop"
+            aria-pressed={project.loopOn}
+          >
+            ⟳
+          </button>
+          <button
+            onClick={toggleCountIn}
+            className={cn(
+              "hidden h-8 items-center rounded-lg px-2 font-mono text-[10px] font-bold uppercase tracking-wider sm:flex",
+              project.countIn ? "bg-[#f2a43a] text-[#17120a]" : "bg-white/5 text-[#a89f91] hover:bg-white/12"
+            )}
+            title="Four-beat count-in before play (with metronome)"
+            aria-label="Toggle count-in"
+            aria-pressed={project.countIn}
+          >
+            1-2-3-4
+          </button>
+          <button
+            onClick={() => void toggleRec()}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-[13px]",
+              recording ? "animate-pulse bg-[#e5533d] text-white" : "bg-white/5 text-[#a89f91] hover:bg-white/12"
+            )}
+            title={recording ? "Stop recording → WAV lands on a pad" : "Record the master output"}
+            aria-label={recording ? "Stop recording" : "Record"}
+            aria-pressed={recording}
+          >
+            ●
+          </button>
+          <button
+            onClick={() => setVisOpen(true)}
+            className="hidden h-8 w-8 items-center justify-center rounded-lg bg-white/5 text-[13px] text-[#a89f91] hover:bg-white/12 sm:flex"
+            title="Full-screen audio visualizer"
+            aria-label="Open visualizer"
+          >
+            ◈
+          </button>
+          <button
+            onClick={() => setKeysOpen(true)}
+            className="hidden h-8 items-center rounded-lg bg-white/5 px-2 font-mono text-[10px] uppercase tracking-wider text-[#a89f91] hover:bg-white/12 sm:flex"
+            title="Performance keyboard — play the selected synth track"
+            aria-label="Open performance keyboard"
+          >
+            ♬ keys
+          </button>
+          {/* markers: add + jump */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className="hidden h-8 items-center rounded-lg bg-white/5 px-2 font-mono text-[10px] uppercase tracking-wider text-[#a89f91] hover:bg-white/12 sm:flex"
+                title="Markers — drop a flag, jump back to it"
+                aria-label="Markers"
+              >
+                ⚑ {project.markers.length > 0 ? project.markers.length : ""}
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-52 border-white/10 bg-[#171310] text-[#f0ece4]">
+              <DropdownMenuItem onClick={addMarker} className="gap-2 focus:bg-white/5">
+                <span className="text-[#f2a43a]">⚑</span> Drop marker at bar {currentStep >= 0 ? Math.floor(currentStep / 16) + 1 : 1}
+              </DropdownMenuItem>
+              {project.markers.length > 0 && <DropdownMenuSeparator className="bg-white/10" />}
+              {project.markers.map((m) => (
+                <DropdownMenuItem
+                  key={m.id}
+                  onClick={() => seek(m.bar * 16)}
+                  className="gap-2 focus:bg-white/5"
+                >
+                  <span className="font-mono text-[10px] text-[#a89f91]">bar {m.bar + 1}</span>
+                  <span className="ml-auto font-semibold">{m.name}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
         {/* position readout — centred, big, impossible to miss */}
@@ -1004,25 +1264,39 @@ export function Studio({ onClose }: { onClose: () => void }) {
             <div className="space-y-0.5">
               {sections.map((s) => {
                 const active = currentStep >= 0 && Math.floor(currentStep / 16) >= s.startBar && Math.floor(currentStep / 16) < s.endBar;
+                const isLoop = project.loopOn && project.loopStart === s.startBar && project.loopEnd === s.endBar;
                 return (
-                  <button
-                    key={s.id}
-                    onClick={() => seek(s.startBar * 16)}
-                    className={cn(
-                      "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[11px]",
-                      active ? "bg-white/10 text-[#f0ece4]" : "text-[#a89f91] hover:bg-white/5"
-                    )}
-                    title={`Jump to bar ${s.startBar + 1}`}
-                  >
-                    <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: s.color }} aria-hidden />
-                    <span className="min-w-0 flex-1 truncate font-medium">{s.name}</span>
-                    <span className="font-mono text-[9px]">{s.startBar + 1}–{s.endBar}</span>
-                    {s.mutes.length > 0 && (
-                      <span className="rounded bg-white/8 px-1 font-mono text-[8px]" title={`${s.mutes.length} track(s) muted here`}>
-                        −{s.mutes.length}
-                      </span>
-                    )}
-                  </button>
+                  <div key={s.id} className={cn("flex items-center gap-1 rounded-md px-1", active ? "bg-white/10" : "")}>
+                    <button
+                      onClick={() => seek(s.startBar * 16)}
+                      className={cn(
+                        "flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1 text-left text-[11px]",
+                        active ? "text-[#f0ece4]" : "text-[#a89f91] hover:bg-white/5"
+                      )}
+                      title={`Jump to bar ${s.startBar + 1}`}
+                    >
+                      <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: s.color }} aria-hidden />
+                      <span className="min-w-0 flex-1 truncate font-medium">{s.name}</span>
+                      <span className="font-mono text-[9px]">{s.startBar + 1}–{s.endBar}</span>
+                      {s.mutes.length > 0 && (
+                        <span className="rounded bg-white/8 px-1 font-mono text-[8px]" title={`${s.mutes.length} track(s) muted here`}>
+                          −{s.mutes.length}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => (isLoop ? toggleLoop() : loopSection(s.startBar, s.endBar))}
+                      className={cn(
+                        "flex h-5 w-5 shrink-0 items-center justify-center rounded font-mono text-[9px]",
+                        isLoop ? "bg-[#8fbf6b] text-[#10130a]" : "text-[#a89f91]/60 hover:bg-white/10 hover:text-[#f0ece4]"
+                      )}
+                      title={isLoop ? "Loop off" : `Loop ${s.name} (bars ${s.startBar + 1}–${s.endBar})`}
+                      aria-label={`Loop section ${s.name}`}
+                      aria-pressed={isLoop}
+                    >
+                      ⟳
+                    </button>
+                  </div>
                 );
               })}
             </div>
@@ -1205,6 +1479,26 @@ export function Studio({ onClose }: { onClose: () => void }) {
           </div>
         </div>
       )}
+
+      <Visualizer
+        open={visOpen}
+        onClose={() => setVisOpen(false)}
+        getMasterLevel={getMasterLevel}
+        getAnalyser={getAnalyser}
+      />
+      <PerfKeyboard
+        open={keysOpen}
+        onClose={() => setKeysOpen(false)}
+        track={selTrackObj?.kind === "synth" ? selTrackObj : null}
+        onPlay={(pitch) => {
+          if (selTrackObj?.kind === "synth") {
+            setStarted(true);
+            void getEngine().playNoteLive(selTrackObj.id, pitch, 0.9, 0.55);
+          }
+        }}
+        octave={kbOctave}
+        onOctave={setKbOctave}
+      />
 
       <ExportDialog
         open={exportOpen}

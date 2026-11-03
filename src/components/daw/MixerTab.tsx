@@ -1,20 +1,68 @@
 "use client";
 
-import { memo } from "react";
-import type { Project, Track } from "@/lib/daw/types";
+import { memo, useEffect, useMemo, useRef } from "react";
+import type { BusName, Project, Track } from "@/lib/daw/types";
 import { cn } from "@/lib/utils";
 import { Meter } from "./ui";
+
+const BUS_OPTS: Array<{ id: BusName; label: string }> = [
+  { id: "drums", label: "D" },
+  { id: "bass", label: "B" },
+  { id: "music", label: "M" },
+];
+
+const BUS_STRIPS: Array<{ id: BusName; label: string }> = [
+  { id: "drums", label: "Drums" },
+  { id: "bass", label: "Bass" },
+  { id: "music", label: "Music" },
+];
+
+const fmtLufs = (n: number) => n.toFixed(1);
+const fmtCpu = (n: number) => `${Math.round(n)}%`;
+
+/** DOM-level readout polled at ~4 Hz via rAF — keeps the memoised mixer from re-rendering */
+function LiveReadout({
+  get,
+  format,
+  fallback,
+}: {
+  get?: () => number;
+  format: (n: number) => string;
+  fallback: string;
+}) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!get) return;
+    let raf = 0;
+    let last = 0;
+    const loop = (now: number) => {
+      raf = requestAnimationFrame(loop);
+      if (now - last < 250) return; // ~4 refreshes per second
+      last = now;
+      if (ref.current) ref.current.textContent = format(get());
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [get, format]);
+  return <span ref={ref}>{fallback}</span>;
+}
 
 function MixerTabInner({
   project,
   updateProject,
   getLevel,
   getMasterLevel,
+  getMasterLufs,
+  getCpu,
 }: {
   project: Project;
   updateProject: (fn: (p: Project) => Project) => void;
   getLevel: (trackId: string) => number;
   getMasterLevel: () => number;
+  /** live integrated loudness (approx LUFS) — renders "—" when absent */
+  getMasterLufs?: () => number;
+  /** rough engine load 0..100 — renders "—" when absent */
+  getCpu?: () => number;
 }) {
   const setTrack = (id: string, patch: Partial<Track>) => {
     updateProject((p) => ({
@@ -24,6 +72,22 @@ function MixerTabInner({
   };
 
   const anySolo = project.tracks.some((t) => t.solo);
+
+  // bus group meters — visual only (the engine routes buses internally)
+  const busMembers = useMemo(() => {
+    const byBus: Record<BusName, string[]> = { drums: [], bass: [], music: [] };
+    for (const t of project.tracks) byBus[t.bus].push(t.id);
+    return byBus;
+  }, [project.tracks]);
+
+  const busGetters = useMemo(
+    () => ({
+      drums: () => busMembers.drums.reduce((a, id) => a + getLevel(id), 0),
+      bass: () => busMembers.bass.reduce((a, id) => a + getLevel(id), 0),
+      music: () => busMembers.music.reduce((a, id) => a + getLevel(id), 0),
+    }),
+    [busMembers, getLevel]
+  );
 
   return (
     <div className="space-y-4">
@@ -49,6 +113,28 @@ function MixerTabInner({
                 <span className="ml-auto font-mono text-[9px] uppercase text-[#a89f91]">
                   {t.kind === "drum" ? "DRUM" : "SYNTH"}
                 </span>
+              </div>
+              {/* group bus routing */}
+              <div className="mb-2 flex items-center gap-1.5">
+                <span className="font-mono text-[9px] uppercase text-[#a89f91]">Bus</span>
+                <div className="ml-auto flex overflow-hidden rounded-md ring-1 ring-inset ring-white/10" role="group" aria-label="Group bus">
+                  {BUS_OPTS.map((b) => (
+                    <button
+                      key={b.id}
+                      onClick={() => setTrack(t.id, { bus: b.id })}
+                      title={`Route to ${b.id} bus`}
+                      aria-pressed={t.bus === b.id}
+                      className={cn(
+                        "h-5 w-7 font-mono text-[9px] font-bold transition-colors",
+                        t.bus === b.id
+                          ? "bg-[#f2a43a] text-[#17120a]"
+                          : "bg-white/5 text-[#a89f91] hover:bg-white/10"
+                      )}
+                    >
+                      {b.label}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="flex gap-2">
                 <div className="relative h-20 w-1.5 shrink-0 overflow-hidden rounded-full bg-black/50">
@@ -182,6 +268,40 @@ function MixerTabInner({
                   </span>
                 </div>
               </div>
+
+              {/* kick sidechain */}
+              <div
+                className="mt-1.5 border-t border-white/5 pt-2"
+                title="Ducks this channel every time the kick hits"
+              >
+                <div className="mb-1 flex items-center gap-1.5">
+                  <span className="font-mono text-[9px] uppercase text-[#a89f91]">Sidechain</span>
+                  <span className="font-mono text-[9px] text-[#f0ece4]">{Math.round(t.duck * 100)}%</span>
+                  <button
+                    onClick={() => setTrack(t.id, { duck: t.duck > 0 ? 0 : 0.6 })}
+                    title="Ducks this channel every time the kick hits"
+                    aria-pressed={t.duck > 0}
+                    className={cn(
+                      "ml-auto h-4 rounded px-1.5 font-mono text-[8px] font-bold uppercase tracking-wider transition-colors",
+                      t.duck > 0
+                        ? "bg-[#f2a43a] text-[#17120a]"
+                        : "bg-white/5 text-[#a89f91] hover:bg-white/10"
+                    )}
+                  >
+                    {t.duck > 0 ? "on" : "off"}
+                  </button>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={t.duck}
+                  onChange={(e) => setTrack(t.id, { duck: Number(e.target.value) })}
+                  className="h-1 w-full cursor-pointer appearance-none rounded-full bg-white/10 accent-[#e5533d]"
+                  aria-label={`Sidechain duck depth ${Math.round(t.duck * 100)}%`}
+                />
+              </div>
               {!audible && (
                 <div className="mt-1 rounded bg-black/30 py-0.5 text-center font-mono text-[8px] uppercase tracking-widest text-[#e5533d]">
                   {t.muted ? "muted" : "not soloed"}
@@ -232,6 +352,48 @@ function MixerTabInner({
               </div>
             </div>
           </div>
+          {/* live master metering — LUFS + CPU (wired by the studio when available) */}
+          <div className="mt-2 grid grid-cols-2 gap-1.5">
+            <div
+              className="rounded-md bg-black/40 px-2 py-1.5 text-center"
+              title="Integrated loudness (approx LUFS) of the live master"
+            >
+              <div className="font-mono text-[9px] uppercase tracking-wider text-[#a89f91]">LUFS</div>
+              <div className="font-mono text-[11px] text-[#f2a43a]">
+                <LiveReadout get={getMasterLufs} format={fmtLufs} fallback="—" />
+              </div>
+            </div>
+            <div
+              className="rounded-md bg-black/40 px-2 py-1.5 text-center"
+              title="Estimated engine load"
+            >
+              <div className="font-mono text-[9px] uppercase tracking-wider text-[#a89f91]">CPU</div>
+              <div className="font-mono text-[11px] text-[#8fbf6b]">
+                <LiveReadout get={getCpu} format={fmtCpu} fallback="—" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* BUSES — visual group meters (the engine routes buses internally) */}
+      <div className="rounded-xl border border-white/8 bg-[#14100d] p-3">
+        <div className="mb-2 flex items-center gap-2">
+          <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#f2a43a]">Buses</span>
+          <span className="font-mono text-[9px] text-[#a89f91]">
+            group meters · routed internally by the engine
+          </span>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-3">
+          {BUS_STRIPS.map((b) => (
+            <div key={b.id} className="rounded-lg bg-black/30 px-2.5 py-2 ring-1 ring-inset ring-white/5">
+              <div className="mb-1.5 flex items-baseline justify-between font-mono text-[9px] uppercase tracking-wider text-[#a89f91]">
+                <span>{b.label}</span>
+                <span className="text-[#f0ece4]">{busMembers[b.id].length} ch</span>
+              </div>
+              <Meter get={busGetters[b.id]} className="h-2" />
+            </div>
+          ))}
         </div>
       </div>
       <div className="text-center font-mono text-[10px] tracking-wide text-[#a89f91]/70">

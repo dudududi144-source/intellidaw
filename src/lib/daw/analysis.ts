@@ -6,6 +6,7 @@
 import {
   keyToPitchClasses,
   STEP_COUNT,
+  type DrumTrack,
   type Project,
 } from "./types";
 
@@ -50,7 +51,7 @@ export function computeStats(project: Project): ProjectStats {
       }
     }
   }
-  const kick = project.tracks.find((t) => t.kind === "drum" && t.sound === "kick");
+  const kick = project.tracks.find((t): t is DrumTrack => t.kind === "drum" && t.sound === "kick");
   const bass = project.tracks.find((t) => t.kind === "synth" && /bass/i.test(t.name));
   let kickBassClash = 0;
   if (kick && bass && bass.kind === "synth") {

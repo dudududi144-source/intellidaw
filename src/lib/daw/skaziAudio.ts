@@ -17,8 +17,8 @@ const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 
 export type CurveName = "soft" | "hard" | "fuzz" | "tube" | "crush" | "fold";
 
-const curveCache = new Map<string, Float32Array>();
-export function shaperCurve(name: CurveName, amount = 0.5): Float32Array {
+const curveCache = new Map<string, Float32Array<ArrayBuffer>>();
+export function shaperCurve(name: CurveName, amount = 0.5): Float32Array<ArrayBuffer> {
   const key = `${name}:${Math.round(amount * 20)}`;
   const hit = curveCache.get(key);
   if (hit) return hit;
@@ -1062,8 +1062,8 @@ const buildSkilter: FxBuilder = (ctx) => {
       if (struct !== lastStruct) {
         lastStruct = struct;
         const types = ["lowpass", "bandpass", "highpass", "notch"];
-        f1.type = types[clamp(Math.round(p.mode), 0, 3)];
-        f2.type = f1.type;
+        f1.type = types[clamp(Math.round(p.mode), 0, 3)] as BiquadFilterType;
+        f2.type = f1.type as BiquadFilterType;
         // slope: 12dB = single stage (bypass f2 via allpass-ish), we approximate with Q tweak
         f2.Q.value = p.slope >= 2 ? 8 : 0.0001;
         f1.Q.value = p.slope >= 1 ? p.res : p.res;

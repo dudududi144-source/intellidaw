@@ -26,7 +26,7 @@ export function cachedNoise(ctx: BaseAudioContext, seconds: number): AudioBuffer
     m = new Map();
     noiseCaches.set(ctx, m);
   }
-  let best = NOISE_SECS[0];
+  let best: number = NOISE_SECS[0];
   for (const s of NOISE_SECS) {
     if (Math.abs(s - seconds) < Math.abs(best - seconds)) best = s;
   }
