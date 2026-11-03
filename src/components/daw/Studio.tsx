@@ -1,15 +1,18 @@
 "use client";
 
 /* ------------------------------------------------------------------ */
-/*  Studio — one connected workspace.                                  */
+/*  Studio v2 — a fixed-viewport, fully-connected workspace.           */
 /*                                                                     */
-/*  LEFT: track list        (pick what you work on)                    */
-/*  TOP:  timeline          (see the whole groove + playhead)          */
-/*  MID:  editor            (notes of the selected track)              */
-/*  RIGHT: device rack      (sound + mix of the selected track)        */
-/*  RAIL: mixer/pads/skazi/assistant panels on demand                  */
+/*  HEADER    project · tempo · key · groove · history · save/export   */
+/*  TRANSPORT play · position · master FX · master meter               */
+/*  LEFT      tracks (always in sync) + song sections                  */
+/*  CENTER    one focused view at a time, chosen from the switcher:    */
+/*            Timeline · Notes · Pads · Mixer · Live · SKAZI · Aide    */
+/*  RIGHT     device rack of the selected track — always visible       */
+/*  STATUS    engine state + contextual hint for the open view         */
 /*                                                                     */
-/*  Everything reacts to the selected track — no disconnected tabs.    */
+/*  Every part reacts to the selected track. Nothing is clipped:       */
+/*  the shell fits the viewport exactly, panels scroll internally.     */
 /* ------------------------------------------------------------------ */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -51,17 +54,56 @@ import { MixerTab } from "./MixerTab";
 import { AssistantTabMemo } from "./AssistantTab";
 import { SkaziTab } from "./SkaziTab";
 import { PadsTab } from "./PadsTab";
+import { SessionTab as SessionTabMemo } from "./SessionTab";
 import { ExportDialog } from "./ExportDialog";
 import { ProjectsDrawer } from "./ProjectsDrawer";
 import { Meter } from "./ui";
 
-type Panel = "mixer" | "pads" | "skazi" | "assistant" | null;
+type View = "arrange" | "editor" | "pads" | "mixer" | "live" | "skazi" | "assistant";
 
-const PANELS: Array<{ id: Exclude<Panel, null>; label: string; icon: string }> = [
-  { id: "mixer", label: "Mixer", icon: "⇵" },
-  { id: "pads", label: "Pads", icon: "▩" },
-  { id: "skazi", label: "SKAZI", icon: "✦" },
-  { id: "assistant", label: "Assistant", icon: "◎" },
+const VIEWS: Array<{ id: View; label: string; icon: string; hint: string }> = [
+  {
+    id: "arrange",
+    label: "Timeline",
+    icon: "▤",
+    hint: "Click a lane to pick that track · click the ruler to jump · sections mute below",
+  },
+  {
+    id: "editor",
+    label: "Notes",
+    icon: "✎",
+    hint: "Click an empty cell to place · click a note to grow it · shift+click erases",
+  },
+  {
+    id: "pads",
+    label: "Pads",
+    icon: "▩",
+    hint: "Tap pads or use the keyboard rows 1234…qwer · load your own samples",
+  },
+  {
+    id: "mixer",
+    label: "Mixer",
+    icon: "⇵",
+    hint: "Balance levels · shape the EQ · send tracks to delay and reverb",
+  },
+  {
+    id: "live",
+    label: "Live",
+    icon: "◉",
+    hint: "Press play, then launch sections and sweep the master FX in real time",
+  },
+  {
+    id: "skazi",
+    label: "SKAZI",
+    icon: "✦",
+    hint: "19 extra devices — pick one, tweak it, drop its pattern onto a track",
+  },
+  {
+    id: "assistant",
+    label: "Assistant",
+    icon: "◎",
+    hint: "Scan the whole song, then apply one-tap fixes with undo support",
+  },
 ];
 
 const TRACK_COLORS = ["#f2a43a", "#e5c15a", "#d97b5a", "#8fbf6b", "#c084fc", "#b8a98f", "#6bc5b8", "#e5533d"];
@@ -74,7 +116,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
   const [project, setProject] = useState<Project | null>(() =>
     typeof window !== "undefined" ? loadCurrent() ?? createDefaultProject() : null
   );
-  const [panel, setPanel] = useState<Panel>(() => (peekDeviceSelect() ? "skazi" : null));
+  const [view, setView] = useState<View>(() => (peekDeviceSelect() ? "skazi" : "arrange"));
   const [playing, setPlaying] = useState(false);
   const [currentStep, setCurrentStep] = useState(-1); // absolute step, -1 stopped
   const [selTrack, setSelTrack] = useState<string | null>(null);
@@ -85,21 +127,13 @@ export function Studio({ onClose }: { onClose: () => void }) {
   const [started, setStarted] = useState(false);
   const [metro, setMetro] = useState(false);
   const [fxOpen, setFxOpen] = useState(false);
+  const [grooveOpen, setGrooveOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [deviceSheet, setDeviceSheet] = useState(false);
   const [fxFilter, setFxFilter] = useState(1);
   const [fxDrive, setFxDrive] = useState(0);
-  const [wide, setWide] = useState(true); // lg+ layout for the tools panel
   const stepRef = useRef<(s: number) => void>(() => {});
   const projectRef = useRef<Project | null>(project);
-
-  /* desktop vs mobile sheet for the tools panel */
-  useEffect(() => {
-    const mq = window.matchMedia("(min-width: 1024px)");
-    const on = () => setWide(mq.matches);
-    on();
-    mq.addEventListener("change", on);
-    return () => mq.removeEventListener("change", on);
-  }, []);
 
   /* ---------------- undo / redo ---------------- */
   const past = useRef<Project[]>([]);
@@ -205,6 +239,11 @@ export function Studio({ onClose }: { onClose: () => void }) {
     return project.tracks[0]?.id ?? null;
   }, [project, selTrack]);
 
+  const selTrackObj = useMemo(
+    () => project?.tracks.find((t) => t.id === effSel) ?? null,
+    [project, effSel]
+  );
+
   const updateProject = useCallback((fn: (p: Project) => Project) => {
     setProject((p) => (p ? { ...fn(p), updatedAt: Date.now() } : p));
   }, []);
@@ -287,6 +326,18 @@ export function Studio({ onClose }: { onClose: () => void }) {
     getEngine().setLiveDrive(v);
   }, []);
 
+  /* select a track from the timeline: pick it AND land in its notes */
+  const selectFromTimeline = useCallback(
+    (id: string) => {
+      setSelTrack(id);
+      if (view === "arrange") {
+        const t = projectRef.current?.tracks.find((x) => x.id === id);
+        if (t) setView("editor");
+      }
+    },
+    [view]
+  );
+
   /* ---------------- keyboard ---------------- */
   useEffect(() => {
     const onKey = async (ev: KeyboardEvent) => {
@@ -305,7 +356,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
         return;
       }
       if (k === "escape") {
-        if (panel) setPanel(null);
+        if (deviceSheet) setDeviceSheet(false);
         else if (!exportOpen && !projectsOpen) onClose();
         return;
       }
@@ -320,8 +371,12 @@ export function Studio({ onClose }: { onClose: () => void }) {
         toggleMetro();
         return;
       }
-      /* 1–9 selects the Nth track (unless the pads panel owns the digits) */
-      if (/^[1-9]$/.test(k) && !ev.ctrlKey && !ev.metaKey && !ev.altKey && panel !== "pads") {
+      /* 1–7 switches views, shift+1–9 selects the Nth track */
+      if (/^[1-7]$/.test(k) && ev.shiftKey && !ev.ctrlKey && !ev.metaKey) {
+        setView(VIEWS[Number(k) - 1].id);
+        return;
+      }
+      if (/^[1-9]$/.test(k) && !ev.ctrlKey && !ev.metaKey && !ev.altKey && !ev.shiftKey && view !== "pads") {
         const t = projectRef.current?.tracks[Number(k) - 1];
         if (t) setSelTrack(t.id);
         return;
@@ -331,14 +386,14 @@ export function Studio({ onClose }: { onClose: () => void }) {
         setHelpOpen((h) => !h);
         return;
       }
-      if (panel === "pads" && k in PAD_KEY_INDEX) {
+      if (view === "pads" && k in PAD_KEY_INDEX) {
         ev.preventDefault();
         await playPad(PAD_KEY_INDEX[k]);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [panel, togglePlay, toggleMetro, playPad, undo, redo, exportOpen, projectsOpen, onClose]);
+  }, [view, togglePlay, toggleMetro, playPad, undo, redo, exportOpen, projectsOpen, deviceSheet, onClose]);
 
   /* ---------------- assistant fixes ---------------- */
   const applyFix = useCallback(
@@ -414,6 +469,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
           : makeSynthTrack(`Synth ${n + 1}`, color, {});
       updateProject((prev) => ({ ...prev, tracks: [...prev.tracks, t] }));
       setSelTrack(t.id);
+      setView("editor");
     },
     [updateProject]
   );
@@ -453,28 +509,56 @@ export function Studio({ onClose }: { onClose: () => void }) {
     .toString()
     .padStart(2, "0")}`;
 
-  const panelTitle = PANELS.find((p) => p.id === panel)?.label ?? "";
+  const activeView = VIEWS.find((v) => v.id === view)!;
+  const sections = project.sections ?? [];
 
-  const panelContent = panel ? (
+  const viewContent = (
     <>
-      {panel === "mixer" && (
-        <MixerTab project={project} updateProject={updateProject} getLevel={getLevel} getMasterLevel={getMasterLevel} />
+      {view === "arrange" && (
+        <Timeline
+          project={project}
+          currentStep={currentStep}
+          playing={playing}
+          selectedId={effSel}
+          onSelect={selectFromTimeline}
+          onSeek={seek}
+          updateProject={updateProject}
+        />
       )}
-      {panel === "pads" && (
+      {view === "editor" && (
+        <EditorPanel
+          project={project}
+          selectedId={effSel}
+          updateProject={updateProject}
+          currentStep={currentStep >= 0 ? currentStep % 16 : -1}
+          drawLen={drawLen}
+          onDrawLen={setDrawLen}
+          onPreviewDrum={(s, v) => void playDrumPreview(s, v)}
+          onPreviewNote={(t, p) => void previewNote(t, p)}
+        />
+      )}
+      {view === "pads" && (
         <PadsTab project={project} updateProject={updateProject} onPlayPad={playPadSlot} flashSlot={flashSlot} />
       )}
-      {panel === "skazi" && <SkaziTab project={project} updateProject={updateProject} />}
-      {panel === "assistant" && <AssistantTabMemo project={project} onApplyFix={applyFix} />}
+      {view === "mixer" && (
+        <MixerTab project={project} updateProject={updateProject} getLevel={getLevel} getMasterLevel={getMasterLevel} />
+      )}
+      {view === "live" && <SessionTabMemo project={project} currentStep={currentStep} playing={playing} />}
+      {view === "skazi" && <SkaziTab project={project} updateProject={updateProject} />}
+      {view === "assistant" && <AssistantTabMemo project={project} onApplyFix={applyFix} />}
     </>
-  ) : null;
+  );
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-[#0a0807] text-[#f0ece4]">
-      {/* ============ top bar ============ */}
-      <header className="flex flex-wrap items-center gap-2 border-b border-white/8 bg-[#100d0b] px-3 py-2 sm:gap-3 sm:px-4">
+    <div
+      className="fixed inset-0 z-50 flex h-dvh flex-col overflow-hidden bg-[#0a0807] text-[#f0ece4]"
+      style={{ height: "100dvh" }}
+    >
+      {/* ================= header ================= */}
+      <header className="studio-scroll flex h-12 shrink-0 items-center gap-2 overflow-x-auto border-b border-white/8 bg-[#100d0b] px-2 sm:gap-3 sm:px-4 [&>*]:shrink-0">
         <button
           onClick={onClose}
-          className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-white/5"
+          className="flex items-center gap-2 rounded-lg px-1.5 py-1 hover:bg-white/5"
           title="Back to the site"
         >
           <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#f2a43a] text-[#17120a]">
@@ -486,7 +570,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
         <input
           value={project.name}
           onChange={(e) => updateProject((p) => ({ ...p, name: e.target.value }))}
-          className="w-28 rounded-lg border border-white/8 bg-black/30 px-2.5 py-1.5 text-[13px] font-semibold text-[#f0ece4] outline-none focus:border-[#f2a43a]/50 sm:w-44"
+          className="w-24 rounded-lg border border-white/8 bg-black/30 px-2.5 py-1.5 text-[13px] font-semibold text-[#f0ece4] outline-none focus:border-[#f2a43a]/50 sm:w-44"
           aria-label="Project name"
         />
 
@@ -531,18 +615,18 @@ export function Studio({ onClose }: { onClose: () => void }) {
         <div className="flex items-center gap-1 rounded-lg border border-white/8 bg-black/30 px-2 py-1">
           <button
             onClick={() => updateProject((p) => ({ ...p, bpm: Math.max(60, p.bpm - 1) }))}
-            className="px-1.5 font-mono text-sm text-[#a89f91] hover:text-[#f0ece4]"
+            className="px-1 font-mono text-sm text-[#a89f91] hover:text-[#f0ece4]"
             aria-label="Decrease BPM"
           >
             −
           </button>
-          <div className="w-14 text-center">
+          <div className="w-12 text-center">
             <div className="font-mono text-sm font-bold leading-none text-[#f0ece4]">{project.bpm}</div>
             <div className="font-mono text-[8px] uppercase tracking-widest text-[#a89f91]">BPM</div>
           </div>
           <button
             onClick={() => updateProject((p) => ({ ...p, bpm: Math.min(200, p.bpm + 1) }))}
-            className="px-1.5 font-mono text-sm text-[#a89f91] hover:text-[#f0ece4]"
+            className="px-1 font-mono text-sm text-[#a89f91] hover:text-[#f0ece4]"
             aria-label="Increase BPM"
           >
             +
@@ -562,6 +646,31 @@ export function Studio({ onClose }: { onClose: () => void }) {
             </option>
           ))}
         </select>
+
+        {/* groove (swing) */}
+        <DropdownMenu open={grooveOpen} onOpenChange={setGrooveOpen}>
+          <DropdownMenuTrigger asChild>
+            <button
+              className="hidden h-8 items-center rounded-lg border border-white/8 bg-black/30 px-2.5 font-mono text-[10px] uppercase tracking-wider text-[#a89f91] hover:text-[#f0ece4] md:flex"
+              title="Groove / swing amount"
+            >
+              groove {Math.round(project.swing * 200)}%
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-60 border-white/10 bg-[#171310] p-3 text-[#f0ece4]">
+            <div className="mb-2 font-mono text-[9px] uppercase tracking-widest text-[#f2a43a]">Swing</div>
+            <Slider
+              value={[project.swing]}
+              min={0}
+              max={0.45}
+              step={0.01}
+              onValueChange={(v) => updateProject((p) => ({ ...p, swing: v[0] }))}
+            />
+            <div className="mt-2 font-mono text-[9px] leading-relaxed text-[#a89f91]">
+              Delays every off-beat 16th — 0% is straight, higher values lean into a shuffle.
+            </div>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
           <div className="flex items-center overflow-hidden rounded-lg border border-white/8">
@@ -610,9 +719,9 @@ export function Studio({ onClose }: { onClose: () => void }) {
         </div>
       </header>
 
-      {/* ============ transport strip ============ */}
+      {/* ================= transport ================= */}
       <div
-        className="relative z-30 flex items-center gap-2 border-b border-white/8 bg-[#0d0a08] px-3 py-1.5 sm:gap-3 sm:px-4"
+        className="relative z-30 flex h-14 shrink-0 items-center gap-2 border-b border-white/8 bg-[#0d0a08] px-2 sm:gap-3 sm:px-4"
         role="toolbar"
         aria-label="Transport"
       >
@@ -628,7 +737,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
           <button
             onClick={() => void togglePlay()}
             className={cn(
-              "flex h-9 items-center gap-2 rounded-xl px-4 font-mono text-[12px] font-bold tracking-wider transition-colors",
+              "flex h-10 items-center gap-2 rounded-xl px-4 font-mono text-[12px] font-bold tracking-wider transition-colors",
               playing
                 ? "bg-[#e5533d] text-white hover:bg-[#f0684f]"
                 : "bg-[#8fbf6b] text-[#10130a] hover:bg-[#a3d67f]"
@@ -651,27 +760,25 @@ export function Studio({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        {/* position readout */}
-        <div className="flex items-center gap-2 rounded-lg border border-white/8 bg-black/30 px-2.5 py-1">
-          <span className="font-mono text-[13px] font-bold tabular-nums text-[#f0ece4]">{bar}</span>
-          <span className="font-mono text-[8px] uppercase tracking-widest text-[#a89f91]">bar</span>
-          <span className="font-mono text-[13px] font-bold tabular-nums text-[#f0ece4]">{beat}</span>
-          <span className="hidden font-mono text-[8px] uppercase tracking-widest text-[#a89f91] sm:block">beat</span>
-          <span className="hidden font-mono text-[13px] font-bold tabular-nums text-[#f2a43a] sm:block">{tick}</span>
-          <span className="hidden font-mono text-[10px] tabular-nums text-[#a89f91] md:block">{tc}</span>
+        {/* position readout — centred, big, impossible to miss */}
+        <div className="flex flex-1 justify-center">
+          <div className="flex items-baseline gap-1.5 rounded-xl border border-white/8 bg-black/40 px-3 py-1">
+            <span className="font-mono text-[17px] font-bold tabular-nums leading-none text-[#f2a43a]">{bar}</span>
+            <span className="font-mono text-[8px] uppercase tracking-widest text-[#a89f91]">bar</span>
+            <span className="font-mono text-[17px] font-bold tabular-nums leading-none text-[#f0ece4]">{beat}</span>
+            <span className="font-mono text-[8px] uppercase tracking-widest text-[#a89f91]">beat</span>
+            <span className="font-mono text-[17px] font-bold tabular-nums leading-none text-[#f0ece4]/60">{tick}</span>
+            <span className="ml-2 hidden font-mono text-[11px] tabular-nums text-[#a89f91] sm:block">{tc}</span>
+          </div>
         </div>
 
-        <span className="hidden font-mono text-[10px] uppercase tracking-widest text-[#a89f91] lg:block">
-          {playing ? `▶ bar ${bar}/${SONG_BARS}` : "stopped"} · {project.songKey}
-        </span>
-
-        <div className="ml-auto flex items-center gap-2">
+        <div className="flex items-center gap-2">
           {/* master FX popover */}
           <DropdownMenu open={fxOpen} onOpenChange={setFxOpen}>
             <DropdownMenuTrigger asChild>
               <button
                 className={cn(
-                  "hidden h-8 items-center rounded-lg px-2.5 font-mono text-[10px] uppercase tracking-wider sm:flex",
+                  "flex h-8 items-center rounded-lg px-2.5 font-mono text-[10px] uppercase tracking-wider",
                   fxFilter < 1 || fxDrive > 0
                     ? "bg-[#f2a43a] text-[#17120a]"
                     : "bg-white/5 text-[#a89f91] hover:bg-white/12"
@@ -746,12 +853,12 @@ export function Studio({ onClose }: { onClose: () => void }) {
             step={0.01}
             value={project.masterVolume}
             onChange={(e) => updateProject((p) => ({ ...p, masterVolume: Number(e.target.value) }))}
-            className="h-1 w-16 cursor-pointer appearance-none rounded-full bg-white/10 accent-[#f2a43a] sm:w-24"
+            className="h-1 w-14 cursor-pointer appearance-none rounded-full bg-white/10 accent-[#f2a43a] sm:w-24"
             title={`Master ${Math.round(project.masterVolume * 100)}%`}
             aria-label="Master volume"
           />
         </div>
-        {/* keyboard shortcuts popover (the trigger is desktop-only) */}
+        {/* keyboard shortcuts popover */}
         {helpOpen && (
           <div
             className="absolute right-2 top-full z-40 mt-1 hidden w-72 rounded-xl border border-white/10 bg-[#171310] p-3 shadow-2xl sm:block"
@@ -766,6 +873,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
                 ["Space", "Play / stop"],
                 ["M", "Metronome on / off"],
                 ["1–9", "Select track by number"],
+                ["Shift+1–7", "Switch view"],
                 ["Ctrl+Z", "Undo"],
                 ["Ctrl+Shift+Z", "Redo"],
                 ["?", "Toggle this help"],
@@ -780,18 +888,17 @@ export function Studio({ onClose }: { onClose: () => void }) {
               ))}
             </ul>
             <div className="mt-2 border-t border-white/8 pt-2 font-mono text-[9px] leading-relaxed text-[#a89f91]/70">
-              In the editor: click an empty cell to place a note · click a note to
-              grow it · shift+click a note to remove it. On drum steps,
-              shift+click cycles velocity.
+              On drum steps, shift+click cycles velocity. Clicking a track lane in
+              the Timeline jumps straight into its Notes.
             </div>
           </div>
         )}
       </div>
 
-      {/* ============ workspace ============ */}
+      {/* ================= workspace ================= */}
       <div className="flex min-h-0 flex-1">
-        {/* track rail (desktop) */}
-        <aside className="hidden w-52 shrink-0 flex-col border-r border-white/8 bg-[#0d0a08] md:flex">
+        {/* -------- left rail: tracks + song -------- */}
+        <aside className="hidden w-56 shrink-0 flex-col border-r border-white/8 bg-[#0d0a08] md:flex">
           <div className="flex items-center justify-between px-3 pb-1 pt-2.5">
             <span className="font-mono text-[9px] uppercase tracking-widest text-[#a89f91]">
               Tracks · {project.tracks.length}
@@ -803,7 +910,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
                 title="Add drum track"
                 aria-label="Add drum track"
               >
-                ✕
+                ⊞
               </button>
               <button
                 onClick={() => addTrack("synth")}
@@ -815,82 +922,158 @@ export function Studio({ onClose }: { onClose: () => void }) {
               </button>
             </div>
           </div>
-          <div className="studio-scroll flex-1 overflow-y-auto px-2 pb-2">
-            {project.tracks.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setSelTrack(t.id)}
-                className={cn(
-                  "mb-0.5 block w-full rounded-lg px-2 py-1.5 text-left transition-colors",
-                  effSel === t.id ? "bg-white/10 ring-1 ring-white/10" : "hover:bg-white/5"
-                )}
-                aria-pressed={effSel === t.id}
-              >
-                <span className="flex items-center gap-2">
-                  <span
-                    aria-hidden
-                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[10px]"
-                    style={{ background: `${t.color}22`, color: t.color }}
-                  >
-                    {trackIcon(t)}
+          <div className="studio-scroll min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+            {project.tracks.map((t, i) => (
+              <div key={t.id} className="mb-0.5">
+                <button
+                  onClick={() => setSelTrack(t.id)}
+                  onDoubleClick={() => {
+                    setSelTrack(t.id);
+                    setView("editor");
+                  }}
+                  className={cn(
+                    "block w-full rounded-lg px-2 py-1.5 text-left transition-colors",
+                    effSel === t.id ? "bg-white/10 ring-1 ring-white/10" : "hover:bg-white/5"
+                  )}
+                  aria-pressed={effSel === t.id}
+                >
+                  <span className="flex items-center gap-2">
+                    <span
+                      aria-hidden
+                      className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[10px]"
+                      style={{ background: `${t.color}22`, color: t.color }}
+                    >
+                      {trackIcon(t)}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[#f0ece4]">
+                      {t.name}
+                    </span>
+                    <span className="font-mono text-[8px] text-[#a89f91]/50">{i + 1}</span>
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        updateProject((p) => ({
+                          ...p,
+                          tracks: p.tracks.map((x) => (x.id === t.id ? { ...x, muted: !x.muted } : x)),
+                        }));
+                      }}
+                      className={cn(
+                        "flex h-5 w-5 shrink-0 items-center justify-center rounded font-mono text-[9px] font-bold",
+                        t.muted ? "bg-[#e5533d] text-white" : "bg-white/5 text-[#a89f91] hover:bg-white/12"
+                      )}
+                      title="Mute"
+                      role="button"
+                      aria-label={`Mute ${t.name}`}
+                    >
+                      M
+                    </span>
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        updateProject((p) => ({
+                          ...p,
+                          tracks: p.tracks.map((x) => (x.id === t.id ? { ...x, solo: !x.solo } : x)),
+                        }));
+                      }}
+                      className={cn(
+                        "flex h-5 w-5 shrink-0 items-center justify-center rounded font-mono text-[9px] font-bold",
+                        t.solo ? "bg-[#f2a43a] text-[#17120a]" : "bg-white/5 text-[#a89f91] hover:bg-white/12"
+                      )}
+                      title="Solo"
+                      role="button"
+                      aria-label={`Solo ${t.name}`}
+                    >
+                      S
+                    </span>
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[#f0ece4]">
-                    {t.name}
+                  <span className="mt-1 flex items-center gap-1.5">
+                    <span className="h-1 flex-1 overflow-hidden rounded-full bg-black/50">
+                      <Meter get={() => getLevel(t.id)} className="h-1" />
+                    </span>
                   </span>
-                  <span
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      updateProject((p) => ({
-                        ...p,
-                        tracks: p.tracks.map((x) => (x.id === t.id ? { ...x, muted: !x.muted } : x)),
-                      }));
-                    }}
-                    className={cn(
-                      "flex h-5 w-5 shrink-0 items-center justify-center rounded font-mono text-[9px] font-bold",
-                      t.muted ? "bg-[#e5533d] text-white" : "bg-white/5 text-[#a89f91] hover:bg-white/12"
-                    )}
-                    title="Mute"
-                    role="button"
-                    aria-label={`Mute ${t.name}`}
-                  >
-                    M
-                  </span>
-                  <span
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      updateProject((p) => ({
-                        ...p,
-                        tracks: p.tracks.map((x) => (x.id === t.id ? { ...x, solo: !x.solo } : x)),
-                      }));
-                    }}
-                    className={cn(
-                      "flex h-5 w-5 shrink-0 items-center justify-center rounded font-mono text-[9px] font-bold",
-                      t.solo ? "bg-[#f2a43a] text-[#17120a]" : "bg-white/5 text-[#a89f91] hover:bg-white/12"
-                    )}
-                    title="Solo"
-                    role="button"
-                    aria-label={`Solo ${t.name}`}
-                  >
-                    S
-                  </span>
-                </span>
-                <span className="mt-1 flex items-center gap-1.5">
-                  <span className="h-1 flex-1 overflow-hidden rounded-full bg-black/50">
-                    <Meter get={() => getLevel(t.id)} className="h-1" />
-                  </span>
-                </span>
-              </button>
+                </button>
+              </div>
             ))}
           </div>
-          <div className="border-t border-white/8 px-3 py-2 font-mono text-[8px] leading-relaxed text-[#a89f91]/60">
-            select a track → it opens in the timeline, editor and device rack
+
+          {/* song sections — click to jump */}
+          <div className="border-t border-white/8 px-2 py-2">
+            <div className="mb-1 px-1 font-mono text-[9px] uppercase tracking-widest text-[#a89f91]">
+              Song · {SONG_BARS} bars
+            </div>
+            <div className="space-y-0.5">
+              {sections.map((s) => {
+                const active = currentStep >= 0 && Math.floor(currentStep / 16) >= s.startBar && Math.floor(currentStep / 16) < s.endBar;
+                return (
+                  <button
+                    key={s.id}
+                    onClick={() => seek(s.startBar * 16)}
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[11px]",
+                      active ? "bg-white/10 text-[#f0ece4]" : "text-[#a89f91] hover:bg-white/5"
+                    )}
+                    title={`Jump to bar ${s.startBar + 1}`}
+                  >
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: s.color }} aria-hidden />
+                    <span className="min-w-0 flex-1 truncate font-medium">{s.name}</span>
+                    <span className="font-mono text-[9px]">{s.startBar + 1}–{s.endBar}</span>
+                    {s.mutes.length > 0 && (
+                      <span className="rounded bg-white/8 px-1 font-mono text-[8px]" title={`${s.mutes.length} track(s) muted here`}>
+                        −{s.mutes.length}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </aside>
 
-        {/* main column */}
-        <main className="studio-scroll min-w-0 flex-1 overflow-y-auto p-3 pb-24 sm:p-4 lg:pb-4">
+        {/* -------- centre: switcher + view -------- */}
+        <section className="flex min-w-0 flex-1 flex-col bg-[#0b0908]">
+          {/* view switcher */}
+          <div
+            className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-white/8 bg-[#0d0a08] px-2 studio-scroll"
+            role="tablist"
+            aria-label="Studio views"
+          >
+            {VIEWS.map((v) => (
+              <button
+                key={v.id}
+                role="tab"
+                aria-selected={view === v.id}
+                onClick={() => setView(v.id)}
+                className={cn(
+                  "flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[12px] font-medium transition-colors",
+                  view === v.id
+                    ? "bg-[#f2a43a] text-[#17120a]"
+                    : "text-[#a89f91] hover:bg-white/5 hover:text-[#f0ece4]"
+                )}
+              >
+                <span aria-hidden className="font-mono text-[11px]">
+                  {v.icon}
+                </span>
+                {v.label}
+              </button>
+            ))}
+            {view === "arrange" && effSel && (
+              <button
+                onClick={() => setView("editor")}
+                className="ml-auto hidden h-7 shrink-0 items-center gap-1.5 rounded-lg border border-[#f2a43a]/40 bg-[#f2a43a]/10 px-2.5 font-mono text-[10px] uppercase tracking-wider text-[#f2a43a] hover:bg-[#f2a43a]/20 sm:flex"
+              >
+                edit {selTrackObj?.name ?? ""} ▸
+              </button>
+            )}
+            <button
+              onClick={() => setDeviceSheet(true)}
+              className="ml-auto flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 font-mono text-[10px] uppercase tracking-wider text-[#a89f91] lg:hidden"
+            >
+              device ▸
+            </button>
+          </div>
+
           {/* mobile track chips */}
-          <div className="studio-scroll mb-3 flex gap-1.5 overflow-x-auto pb-1 md:hidden">
+          <div className="studio-scroll flex shrink-0 gap-1.5 overflow-x-auto border-b border-white/6 px-2 py-1.5 md:hidden">
             {project.tracks.map((t) => (
               <button
                 key={t.id}
@@ -926,26 +1109,30 @@ export function Studio({ onClose }: { onClose: () => void }) {
             </button>
           </div>
 
-          <div className="mx-auto max-w-6xl space-y-3">
-            <Timeline
-              project={project}
-              currentStep={currentStep}
-              playing={playing}
-              selectedId={effSel}
-              onSelect={setSelTrack}
-              onSeek={seek}
-              updateProject={updateProject}
-            />
-            <EditorPanel
-              project={project}
-              selectedId={effSel}
-              updateProject={updateProject}
-              currentStep={currentStep >= 0 ? currentStep % 16 : -1}
-              drawLen={drawLen}
-              onDrawLen={setDrawLen}
-              onPreviewDrum={(s, v) => void playDrumPreview(s, v)}
-              onPreviewNote={(t, p) => void previewNote(t, p)}
-            />
+          {/* the view itself */}
+          <main
+            className="studio-scroll min-h-0 flex-1 overflow-y-auto p-3 sm:p-4"
+            style={{
+              backgroundImage:
+                "radial-gradient(1100px 420px at 50% -140px, rgba(242,164,58,0.06), transparent)",
+            }}
+          >
+            <div className="mx-auto w-full max-w-6xl">{viewContent}</div>
+          </main>
+        </section>
+
+        {/* -------- right: device rack of the selected track -------- */}
+        <aside className="hidden w-80 shrink-0 flex-col border-l border-white/8 bg-[#0d0a08] lg:flex xl:w-[21rem]">
+          <div className="flex h-10 shrink-0 items-center justify-between border-b border-white/8 px-3">
+            <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-[#a89f91]">Device</span>
+            {selTrackObj && (
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: selTrackObj.color }} />
+                <span className="truncate text-[11px] font-semibold text-[#f0ece4]">{selTrackObj.name}</span>
+              </span>
+            )}
+          </div>
+          <div className="studio-scroll min-h-0 flex-1 overflow-y-auto p-3">
             <DeviceRack
               project={project}
               selectedId={effSel}
@@ -955,63 +1142,35 @@ export function Studio({ onClose }: { onClose: () => void }) {
               onPreviewNote={(t, p) => void previewNote(t, p)}
             />
           </div>
-        </main>
-
-        {/* tools panel (desktop column) */}
-        {panel && wide && (
-          <aside className="flex w-80 shrink-0 flex-col border-l border-white/8 bg-[#0d0a08] xl:w-96">
-            <div className="flex items-center justify-between border-b border-white/8 px-3 py-2">
-              <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#f2a43a]">
-                {panelTitle}
-              </span>
-              <button
-                onClick={() => setPanel(null)}
-                className="flex h-6 w-6 items-center justify-center rounded bg-white/5 text-[11px] text-[#a89f91] hover:bg-white/12 hover:text-[#f0ece4]"
-                aria-label="Close panel"
-              >
-                ✕
-              </button>
-            </div>
-            <div className="studio-scroll min-h-0 flex-1 overflow-y-auto p-3">{panelContent}</div>
-          </aside>
-        )}
+        </aside>
       </div>
 
-      {/* tools rail (desktop) */}
-      <nav
-        className="hidden items-center gap-1 border-t border-white/8 bg-[#100d0b] px-4 py-1.5 md:flex"
-        aria-label="Studio tools"
+      {/* ================= status bar ================= */}
+      <footer
+        className="flex h-8 shrink-0 items-center gap-3 border-t border-white/8 bg-[#100d0b] px-3 font-mono text-[10px] uppercase tracking-wider text-[#a89f91]"
+        style={{ paddingBottom: "max(0px, env(safe-area-inset-bottom))" }}
       >
-        {PANELS.map((p) => (
-          <button
-            key={p.id}
-            onClick={() => setPanel(panel === p.id ? null : p.id)}
-            className={cn(
-              "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors",
-              panel === p.id
-                ? "bg-[#f2a43a] text-[#17120a]"
-                : "text-[#a89f91] hover:bg-white/5 hover:text-[#f0ece4]"
-            )}
-            aria-pressed={panel === p.id}
-          >
-            <span aria-hidden className="mr-1 font-mono text-[11px]">
-              {p.icon}
-            </span>
-            {p.label}
-          </button>
-        ))}
-        <span className="ml-auto flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-[#a89f91]">
-          <span className="truncate">▲ selected: {project.tracks.find((t) => t.id === effSel)?.name ?? "—"}</span>
+        <span className="flex shrink-0 items-center gap-1.5">
+          <span
+            className={cn("h-1.5 w-1.5 rounded-full", playing ? "animate-pulse bg-[#8fbf6b]" : "bg-[#a89f91]/50")}
+            aria-hidden
+          />
+          {playing ? `playing · bar ${bar}/${SONG_BARS}` : `ready · ${project.bpm} bpm · ${project.songKey}`}
         </span>
-      </nav>
+        <span className="hidden min-w-0 flex-1 truncate normal-case tracking-normal text-[#a89f91]/80 md:block">
+          {activeView.hint}
+        </span>
+        <span className="ml-auto hidden shrink-0 sm:block">▲ {selTrackObj?.name ?? "—"}</span>
+        <span className="shrink-0 text-[#a89f91]/50">v2</span>
+      </footer>
 
-      {/* mobile tools sheet */}
-      {panel && !wide && (
-        <div className="fixed inset-0 z-40 flex flex-col justify-end" role="dialog" aria-label={panelTitle}>
+      {/* ================= mobile device sheet ================= */}
+      {deviceSheet && (
+        <div className="fixed inset-0 z-40 flex flex-col justify-end" role="dialog" aria-label="Device">
           <button
             className="flex-1 bg-black/60"
-            onClick={() => setPanel(null)}
-            aria-label="Close panel"
+            onClick={() => setDeviceSheet(false)}
+            aria-label="Close device panel"
             tabIndex={-1}
           />
           <div
@@ -1020,44 +1179,32 @@ export function Studio({ onClose }: { onClose: () => void }) {
           >
             <div className="flex items-center justify-between border-b border-white/8 px-4 py-2">
               <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#f2a43a]">
-                {panelTitle}
+                Device — {selTrackObj?.name ?? ""}
               </span>
               <button
-                onClick={() => setPanel(null)}
+                onClick={() => setDeviceSheet(false)}
                 className="flex h-7 w-7 items-center justify-center rounded bg-white/5 text-[12px] text-[#a89f91]"
-                aria-label="Close panel"
+                aria-label="Close device panel"
               >
                 ✕
               </button>
             </div>
-            <div className="studio-scroll max-h-[62vh] overflow-y-auto p-3">{panelContent}</div>
+            <div className="studio-scroll max-h-[62vh] overflow-y-auto p-3">
+              <DeviceRack
+                project={project}
+                selectedId={effSel}
+                updateProject={updateProject}
+                onDelete={(id) => {
+                  deleteTrack(id);
+                  setDeviceSheet(false);
+                }}
+                onPreviewDrum={(s, v) => void playDrumPreview(s, v)}
+                onPreviewNote={(t, p) => void previewNote(t, p)}
+              />
+            </div>
           </div>
         </div>
       )}
-
-      {/* mobile tools bar */}
-      <nav
-        className="flex justify-around border-t border-white/8 bg-[#100d0b] py-1 md:hidden"
-        aria-label="Studio tools (mobile)"
-        style={{ paddingBottom: "max(4px, env(safe-area-inset-bottom))" }}
-      >
-        {PANELS.map((p) => (
-          <button
-            key={p.id}
-            onClick={() => setPanel(panel === p.id ? null : p.id)}
-            className={cn(
-              "flex min-w-[64px] flex-col items-center gap-0.5 rounded-lg px-2 py-1 text-[9px] font-medium",
-              panel === p.id ? "text-[#f2a43a]" : "text-[#a89f91]"
-            )}
-            aria-pressed={panel === p.id}
-          >
-            <span aria-hidden className="text-sm leading-none">
-              {p.icon}
-            </span>
-            {p.label}
-          </button>
-        ))}
-      </nav>
 
       <ExportDialog
         open={exportOpen}
