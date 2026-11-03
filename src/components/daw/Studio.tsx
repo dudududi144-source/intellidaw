@@ -644,7 +644,9 @@ export function Studio({ onClose }: { onClose: () => void }) {
   );
 
   const getLevel = useCallback((id: string) => getEngine().level(id), []);
+  const getLevelInfo = useCallback((id: string) => getEngine().levelInfo(id), []);
   const getMasterLevel = useCallback(() => getEngine().masterLevel(), []);
+  const getMasterLevels = useCallback(() => getEngine().masterLevels(), []);
   const getMasterLufs = useCallback(() => getEngine().masterLufs(), []);
   const getCpu = useCallback(() => getEngine().cpuEstimate(), []);
   const getAnalyser = useCallback(() => getEngine().masterAnalyser(), []);
@@ -877,7 +879,9 @@ export function Studio({ onClose }: { onClose: () => void }) {
           project={project}
           updateProject={updateProject}
           getLevel={getLevel}
+          getLevelInfo={getLevelInfo}
           getMasterLevel={getMasterLevel}
+          getMasterLevels={getMasterLevels}
           getMasterLufs={getMasterLufs}
           getCpu={getCpu}
         />

@@ -635,6 +635,16 @@ function buildGraph(ctx: BaseAudioContext, project: Project, live: boolean): Gra
     tail.connect(analyser);
     tail = analyser;
     (graphExtras as { masterAnalyser?: AnalyserNode }).masterAnalyser = analyser;
+    /* stereo tap for the L/R meter bridge — leaf analysers, no extra output path */
+    const split = ctx.createChannelSplitter(2);
+    analyser.connect(split);
+    const aL = ctx.createAnalyser();
+    aL.fftSize = 512;
+    const aR = ctx.createAnalyser();
+    aR.fftSize = 512;
+    split.connect(aL, 0);
+    split.connect(aR, 1);
+    (graphExtras as { masterSplit?: { L: AnalyserNode; R: AnalyserNode } }).masterSplit = { L: aL, R: aR };
   }
   tail.connect(ctx.destination);
 
@@ -725,7 +735,10 @@ function identityCurve(): Float32Array<ArrayBuffer> {
   return c;
 }
 
-const graphExtras: { masterAnalyser?: AnalyserNode } = {};
+const graphExtras: {
+  masterAnalyser?: AnalyserNode;
+  masterSplit?: { L: AnalyserNode; R: AnalyserNode };
+} = {};
 
 /* ---------------- SKAZI chain plumbing ---------------- */
 
@@ -1471,6 +1484,9 @@ export class DawEngine {
   /* ---- metering ---- */
 
   private meterBuf = new Uint8Array(256);
+  /** float metering (true dBFS) — channel + master L/R */
+  private meterBufF = new Float32Array(512);
+  private meterBufLR = { L: new Float32Array(512), R: new Float32Array(512) };
 
   level(trackId: string): number {
     if (!this.graph || !this.ctx) return 0;
@@ -1501,6 +1517,66 @@ export class DawEngine {
       if (v > peak) peak = v;
     }
     return Math.min(1, peak * 1.4);
+  }
+
+  /* ---- pro metering (float, true dBFS) ---- */
+
+  private static analyse(buf: Float32Array, n: number): { rms: number; peak: number; db: number } {
+    let peak = 0;
+    let sum = 0;
+    for (let i = 0; i < n; i++) {
+      const v = buf[i];
+      const a = v < 0 ? -v : v;
+      if (a > peak) peak = a;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / Math.max(1, n));
+    const db = peak > 0.001 ? Math.max(-60, 20 * Math.log10(peak)) : -60;
+    return { rms, peak, db };
+  }
+
+  /**
+   * Pro channel metering — RMS + true peak (linear 0..1) + peak dBFS.
+   * Uses the same lazy per-channel analyser as level(); float data, no
+   * byte quantisation, so the console meter and dB readout are real.
+   */
+  levelInfo(trackId: string): { rms: number; peak: number; db: number } {
+    if (!this.graph || !this.ctx) return { rms: 0, peak: 0, db: -60 };
+    const ch = this.graph.channels.get(trackId);
+    if (!ch) return { rms: 0, peak: 0, db: -60 };
+    if (!ch.analyser) {
+      const a = this.ctx.createAnalyser();
+      a.fftSize = 512;
+      ch.gain.connect(a);
+      ch.analyser = a;
+    }
+    const n = Math.min(this.meterBufF.length, ch.analyser.fftSize);
+    ch.analyser.getFloatTimeDomainData(this.meterBufF);
+    return DawEngine.analyse(this.meterBufF, n);
+  }
+
+  /**
+   * Stereo master metering for the L/R meter bridge. Falls back to the
+   * mono master analyser mirrored on both sides until the live graph
+   * has the splitter (headless / first frame).
+   */
+  masterLevels(): { lRms: number; lPeak: number; rRms: number; rPeak: number; dbL: number; dbR: number } {
+    const a = graphExtras.masterAnalyser;
+    const split = graphExtras.masterSplit;
+    if (!split || !a) {
+      if (!a) return { lRms: 0, lPeak: 0, rRms: 0, rPeak: 0, dbL: -60, dbR: -60 };
+      const n = Math.min(this.meterBufF.length, a.fftSize);
+      a.getFloatTimeDomainData(this.meterBufF);
+      const m = DawEngine.analyse(this.meterBufF, n);
+      return { lRms: m.rms, lPeak: m.peak, rRms: m.rms, rPeak: m.peak, dbL: m.db, dbR: m.db };
+    }
+    const nL = Math.min(this.meterBufLR.L.length, split.L.fftSize);
+    const nR = Math.min(this.meterBufLR.R.length, split.R.fftSize);
+    split.L.getFloatTimeDomainData(this.meterBufLR.L);
+    split.R.getFloatTimeDomainData(this.meterBufLR.R);
+    const l = DawEngine.analyse(this.meterBufLR.L, nL);
+    const r = DawEngine.analyse(this.meterBufLR.R, nR);
+    return { lRms: l.rms, lPeak: l.peak, rRms: r.rms, rPeak: r.peak, dbL: l.db, dbR: r.db };
   }
 
   /** the live master analyser (visualizer) — null until audio started */
