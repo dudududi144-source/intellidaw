@@ -8,6 +8,7 @@
 
 import { uid, type Note } from "./types";
 import { bankCount, getBankPreset } from "./presetBank";
+import { FM1_ALGORITHMS } from "./fm1";
 
 /* ---------------- folders & kinds ---------------- */
 
@@ -619,17 +620,30 @@ const extras: SkaziDevice[] = [
   },
 ];
 
-/* ============ FM-1 — native build of the uploaded FM-1.vst3 ============ */
+/* ============ FM-1 — native build of the uploaded FM-1.vst3 ============
+   The uploaded file was binary-analyzed (see /api/plugins/import): it is
+   a Windows x64 CLAP→VST3 wrapper shell for the M-VAVE FM-1 pocket synth
+   (6 ops / 32 algorithms / 128 factory presets). Native Windows binaries
+   cannot execute inside a browser, so the DSP is rebuilt here: 4-op
+   algorithm FM (8 curated algorithms), 128 generated presets.          */
 const fm1Device: SkaziDevice = {
   id: "fm1",
   name: "FM-1",
   folder: "Synths",
   kind: "synth",
-  tagline: "2-operator FM synth · native build of the uploaded FM-1.vst3",
-  desc: "Classic operator FM, rebuilt for the browser: modulator→carrier with ratio and feedback, dual envelopes, resonant filter with its own envelope, syncable LFO (pitch/filter/amp), glide and up to 4-voice unison. 128 presets, playable from your keyboard, MIDI-in and the performance keyboard.",
+  tagline: "Algorithm FM · browser build of the M-VAVE FM-1 (your FM-1.vst3)",
+  desc: "Rebuilt for the browser from your uploaded FM-1.vst3: 4-operator algorithm FM with 8 routing algorithms (the hardware runs 32 six-op set), per-operator index envelopes, feedback on the chain head, resonant filter with its own envelope, LFO (pitch/filter/amp), glide and up to 4-voice unison. 128 presets — matching the hardware's factory count — playable from your keyboard, MIDI-in and the performance keyboard. Import your .vst3/.clap files right here and they are analyzed and mapped to this engine.",
   accent: "#7ec8a9",
   presetsCount: 128,
+  features: [
+    "Hardware: M-VAVE FM-1 pocket synth — 6 ops, 32 algorithms, 128 factory presets",
+    "Uploaded FM-1.vst3 = Windows x64 CLAP→VST3 wrapper shell (DSP lives in a companion .clap)",
+    "Browser build: 4 operators, 8 algorithms (SERIAL…SIMPLE), same 128-preset factory count",
+    "Per-op index envelopes + feedback on chain heads",
+    "Import your own .vst3/.clap below — parsed, hashed and mapped to a native engine",
+  ],
   params: [
+    f("algo", "ALGORITHM", 0, 7, 0, { step: 1, options: [...FM1_ALGORITHMS], fmt: (v) => FM1_ALGORITHMS[v | 0] }),
     f("ratio", "RATIO", 0.25, 16, 1, { step: 0.25, fmt: (v) => `${v.toFixed(2).replace(/\.00$/, "")}:1` }),
     f("modLevel", "MOD LEVEL", 0, 1, 0.35, { fmt: pct }),
     f("fb", "FEEDBACK", 0, 1, 0.12, { fmt: pct }),

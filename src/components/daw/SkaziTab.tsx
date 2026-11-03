@@ -726,6 +726,140 @@ function FxPanel({
   );
 }
 
+/* ---------------- imported plugin files (real intake) ---------------- */
+
+interface PluginImportEntry {
+  sha256: string;
+  fileName: string;
+  size: number;
+  format: string;
+  machine: string | null;
+  isPe: boolean;
+  exportName: string | null;
+  wrapper: string | null;
+  vendor: string | null;
+  markers: string[];
+  engine: string | null;
+  engineNote: string;
+  dspEmbedded: string;
+  importedAt: string;
+}
+
+function PluginImports({ onSet }: { onSet: (id: string) => void }) {
+  const { toast } = useToast();
+  const [entries, setEntries] = useState<PluginImportEntry[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let live = true;
+    fetch("/api/plugins/import")
+      .then((r) => (r.ok ? r.json() : { entries: [] }))
+      .then((d) => {
+        if (live) setEntries(d.entries ?? []);
+      })
+      .catch(() => {
+        if (live) setEntries([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const upload = async (file: File) => {
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/plugins/import", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "import failed");
+      const e = data.entry as PluginImportEntry;
+      setEntries((prev) => [e, ...(prev ?? []).filter((x) => x.sha256 !== e.sha256)]);
+      toast({
+        title: `${e.fileName} analyzed`,
+        description: e.engine
+          ? `${e.wrapper ?? e.format} detected — ${e.engineNote}`
+          : `${e.wrapper ?? e.format} detected — ${e.engineNote}`,
+      });
+      if (e.engine) onSet(e.engine);
+    } catch (err) {
+      toast({ title: "Import failed", description: err instanceof Error ? err.message : "unknown error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mb-2 rounded-lg border border-[#7ec8a9]/25 bg-[#7ec8a9]/5 p-2">
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".vst3,.clap,.dll,.so,.component,.vst"
+        className="hidden"
+        aria-label="Import a plugin file"
+        onChange={(ev) => {
+          const f = ev.target.files?.[0];
+          if (f) void upload(f);
+          ev.target.value = "";
+        }}
+      />
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => fileRef.current?.click()}
+          disabled={busy}
+          className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-[#7ec8a9] hover:text-[#a8e3cd] disabled:opacity-40"
+          aria-label="Import a .vst3 or .clap plugin file"
+        >
+          {busy ? "… analyzing" : "⤒ Import .vst3/.clap"}
+        </button>
+        <span className="font-mono text-[9px] text-[#a89f91]/60">parsed · hashed · mapped</span>
+      </div>
+      {entries && entries.length > 0 && (
+        <ul className="mt-2 space-y-1.5">
+          {entries.slice(0, 4).map((e) => (
+            <li key={e.sha256} className="rounded-md border border-white/5 bg-black/25 p-2">
+              <div className="flex items-center gap-1.5">
+                <span className="truncate font-mono text-[10.5px] font-bold text-[#f0ece4]" title={e.fileName}>
+                  {e.fileName}
+                </span>
+                <span className="ml-auto shrink-0 font-mono text-[9px] text-[#a89f91]/60">
+                  {(e.size / 1024).toFixed(0)} KB
+                </span>
+              </div>
+              <div className="mt-0.5 font-mono text-[9px] leading-relaxed text-[#a89f91]">
+                {e.machine ?? "not a PE binary"} · {e.exportName ?? "no export"}
+                {e.wrapper ? ` · ${e.wrapper}` : ""}
+                {e.vendor ? ` · ${e.vendor}` : ""}
+              </div>
+              <div className="mt-0.5 font-mono text-[9px] leading-relaxed text-[#d9a05b]">{e.dspEmbedded}</div>
+              <div className="mt-1 flex items-center gap-2">
+                {e.engine && (
+                  <button
+                    onClick={() => onSet(e.engine!)}
+                    className="rounded border border-[#7ec8a9]/40 bg-[#7ec8a9]/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-[#7ec8a9] hover:bg-[#7ec8a9]/20"
+                  >
+                    ▸ Load {e.engine === "fm1" ? "FM-1" : e.engine}
+                  </button>
+                )}
+                <a
+                  href={`/api/plugins/import?sha=${e.sha256}&download=1`}
+                  className="font-mono text-[9px] text-[#a89f91] underline-offset-2 hover:text-[#f0ece4] hover:underline"
+                >
+                  ⤓ original file
+                </a>
+                <span className="ml-auto font-mono text-[8.5px] text-[#a89f91]/50">
+                  sha {e.sha256.slice(0, 10)}…
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /* ---------------- main tab ---------------- */
 
 export function SkaziTab({
@@ -834,6 +968,8 @@ export function SkaziTab({
           </a>
         </div>
 
+        <PluginImports onSet={(id) => setSel(id)} />
+
         <nav className="max-h-[46vh] space-y-0.5 overflow-y-auto pr-1" aria-label="Device folders">
           {q === "" && favIds.length > 0 && (
             <div className="mb-1">
@@ -888,8 +1024,9 @@ export function SkaziTab({
 
         <p className="mt-3 border-t border-white/5 pt-2 font-mono text-[9px] leading-relaxed text-[#a89f91]/70">
           All {bundleCount} free tools by Asher Swissa (SKAZI), rebuilt as browser-native devices —
-          plus {originalsCount} Intellidaw originals (FM-1, Limonana, Sabich, Malabi). Original
-          code, no downloads needed.
+          plus {Math.max(0, originalsCount - 1)} Intellidaw originals (Limonana, Sabich, Malabi) and
+          FM-1, a browser build of the M-VAVE FM-1 (import your .vst3 above). Original code,
+          no downloads needed.
         </p>
       </aside>
 

@@ -1,6 +1,8 @@
 /* ------------------------------------------------------------------ */
-/*  FM-1 — 2-operator FM synth. Native Web Audio build standing in     */
-/*  for the uploaded FM-1.vst3 (Windows VST3 by the user).             */
+/*  FM-1 — 4-operator ALGORITHM FM synth. Native Web Audio build of    */
+/*  the user's uploaded FM-1.vst3 (M-VAVE FM-1 hardware synth; the     */
+/*  uploaded Windows file is a CLAP→VST3 wrapper shell — analyzed &    */
+/*  imported via /api/plugins/import, DSP mapped to this engine).      */
 /*  Original implementation — no third-party code.                     */
 /* ------------------------------------------------------------------ */
 
@@ -36,11 +38,42 @@ function tubeCurve(amount: number): Float32Array<ArrayBuffer> {
 let lastFreq: number | null = null;
 let lastTime = -Infinity;
 
-/** FM-1 — 2-operator FM voice: sine modulator → index env → N detuned sine carriers.
- *  Modulator has its own envelope (classic FM "brightness decay"); optional
- *  feedback loop thickens the tone; shared lowpass + drive + amp env on top. */
+/* ------------------------------------------------------------------ */
+/*  8 four-op algorithms (ops: 0=CARRIER, 1=M1 ratio·r, 2=M2 ratio 2,  */
+/*  3=M3 ratio 3). The M-VAVE FM-1 hardware runs 32 six-op algorithms; */
+/*  this browser build curates the classic 4-op set. Each entry:       */
+/*  edges = [from, to] modulation routing, fb = head op with its own   */
+/*  self-feedback loop (a delay node keeps the cycle legal).           */
+/* ------------------------------------------------------------------ */
+export const FM1_ALGORITHMS = [
+  "SERIAL",
+  "TRIPLE PAR",
+  "TWO+CHAIN",
+  "CHAIN+PAR",
+  "BRASS",
+  "FORK",
+  "BELL",
+  "SIMPLE",
+] as const;
+
+const ALGO_GRAPHS: Array<{ edges: Array<[number, number]>; fb: number | null }> = [
+  { edges: [[3, 2], [2, 1], [1, 0]], fb: 3 },  // 0 SERIAL: full cascade, fb at the top
+  { edges: [[1, 0], [2, 0], [3, 0]], fb: 3 },  // 1 TRIPLE PAR: three parallel mods
+  { edges: [[3, 2], [2, 0], [1, 0]], fb: 3 },  // 2 TWO+CHAIN: 2-op stack + parallel mod
+  { edges: [[2, 1], [1, 0], [3, 0]], fb: 2 },  // 3 CHAIN+PAR: stack head fb + parallel
+  { edges: [[2, 1], [1, 0], [3, 0]], fb: 3 },  // 4 BRASS: parallel mod self-feedback
+  { edges: [[3, 1], [2, 1], [1, 0]], fb: 3 },  // 5 FORK: two mods merge into one stack
+  { edges: [[3, 0], [1, 0]], fb: 3 },          // 6 BELL: inharmonic pair, M2 silent
+  { edges: [[1, 0]], fb: 1 },                  // 7 SIMPLE: pure 2-op (classic DX bass)
+];
+
+/** FM-1 — 4-op algorithm FM voice: modulator graph → carrier, per-op
+ *  index envelopes (classic FM brightness decay), feedback loop on the
+ *  chain head, shared lowpass + drive + amp env on top. */
 export function fm1Voice(ctx: BaseAudioContext, dest: AudioNode, p: VoiceParams, pitch: number, vel: number, time: number, dur: number) {
   const v = clamp(vel, 0, 1);
+  const algo = Math.round(clamp(p.algo ?? 0, 0, 7));
+  const graph = ALGO_GRAPHS[algo];
   const ratio = clamp(p.ratio ?? 1, 0.25, 16);
   const modLevel = clamp(p.modLevel ?? 0.4, 0, 1);
   const fbAmt = clamp(p.fb ?? 0.1, 0, 1);
@@ -69,9 +102,11 @@ export function fm1Voice(ctx: BaseAudioContext, dest: AudioNode, p: VoiceParams,
   lastTime = time;
   const glideSec = Math.max(0.01, glide);
 
-  /* amp envelope (same shape as skaziAudio's envGain, FM-1 peak) */
+  /* amp envelope (FM-1 peak; scale down when several parallel branches
+     hit the carrier so dense algorithms don't clip the shared filter) */
+  const branches = graph.edges.filter(([, to]) => to === 0).length || 1;
   const g = ctx.createGain();
-  const peak = 0.32 * v * (0.55 + 0.45 * level);
+  const peak = 0.34 * v * (0.55 + 0.45 * level) * (1 / Math.sqrt(branches)) * (1 / Math.sqrt(unison));
   g.gain.setValueAtTime(0.0001, time);
   g.gain.linearRampToValueAtTime(peak, time + attack);
   g.gain.setTargetAtTime(Math.max(0.0001, peak * sustain), time + attack, Math.max(0.02, decay / 3));
@@ -97,53 +132,86 @@ export function fm1Voice(ctx: BaseAudioContext, dest: AudioNode, p: VoiceParams,
     filt.connect(g).connect(dest);
   }
 
-  /* modulator: sine at carrier × ratio, its gain IS the FM index */
-  const mod = ctx.createOscillator();
-  mod.type = "sine";
-  const modF = f * ratio;
-  mod.frequency.setValueAtTime(glideFrom !== null ? glideFrom * ratio : modF, time);
-  if (glideFrom !== null) mod.frequency.exponentialRampToValueAtTime(modF, time + glideSec);
+  /* op frequency multipliers: carrier = 1, M1 = ratio knob, M2 = 2 (octave), M3 = 3 (fifth)
+     unison spread applies to the carrier stack; modulators are single-osc. */
+  const opMult = [1, ratio, 2, 3];
+  const modOsc = new Map<number, OscillatorNode>(); // op → its single modulator osc
+  const modIdx = new Map<number, GainNode>();       // op → its index gain (post-env signal)
 
-  const mg = ctx.createGain();
-  const idx = f * ratio * (0.25 + modLevel * 3.5) * (1 - 0.4 * (ratio / 16)) * (0.35 + 0.65 * v);
-  mg.gain.setValueAtTime(0.0001, time);
-  mg.gain.linearRampToValueAtTime(Math.max(0.0001, idx), time + attack);
-  mg.gain.setTargetAtTime(Math.max(0.0001, idx * sustain), time + attack, Math.max(0.02, decay / 3));
-  mg.gain.setTargetAtTime(0.0001, end, Math.max(0.02, release / 3));
-  mod.connect(mg);
+  const usedMods = new Set<number>();
+  for (const [from] of graph.edges) usedMods.add(from);
+  if (graph.fb !== null) usedMods.add(graph.fb);
 
-  /* feedback loop: mod → index → delay → fb → modulator frequency */
-  if (fbAmt >= 0.01) {
-    const delay = ctx.createDelay(0.05);
-    delay.delayTime.value = 128 / ctx.sampleRate;
-    const fbGain = ctx.createGain();
-    fbGain.gain.value = clamp(fbAmt * 2.2, 0, 2.2);
-    mg.connect(delay).connect(fbGain).connect(mod.frequency);
+  /* --- modulators (ops 1..3) --- */
+  for (const op of usedMods) {
+    if (op === 0) continue;
+    const targetHz = Math.max(20, f * opMult[op]);
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    const from = glideFrom !== null ? Math.max(20, glideFrom * opMult[op]) : targetHz;
+    osc.frequency.setValueAtTime(from, time);
+    if (glideFrom !== null) osc.frequency.exponentialRampToValueAtTime(targetHz, time + glideSec);
+
+    /* index gain IS the FM depth (Hz deviation), shaped by the note env */
+    const idx = targetHz * (0.25 + modLevel * 3.5) * (0.35 + 0.65 * v);
+    const ig = ctx.createGain();
+    ig.gain.setValueAtTime(0.0001, time);
+    ig.gain.linearRampToValueAtTime(Math.max(0.0001, idx), time + attack);
+    ig.gain.setTargetAtTime(Math.max(0.0001, idx * sustain), time + attack, Math.max(0.02, decay / 3));
+    ig.gain.setTargetAtTime(0.0001, end, Math.max(0.02, release / 3));
+
+    osc.connect(ig);
+    osc.start(time);
+    osc.stop(endAll);
+    modOsc.set(op, osc);
+    modIdx.set(op, ig);
   }
 
-  mod.start(time);
-  mod.stop(endAll);
-
-  /* carriers: up to 4 detuned sines, all driven by the one index gain */
+  /* --- carrier (op 0): unison stack of sines → audio bus --- */
+  const carrierOscs: OscillatorNode[] = [];
   const bus = ctx.createGain();
   bus.gain.value = 1 / Math.sqrt(unison);
-  bus.connect(filt);
-  const carriers: OscillatorNode[] = [];
   for (let i = 0; i < unison; i++) {
     const c = ctx.createOscillator();
     c.type = "sine";
     const spread = unison === 1 ? 0 : ((i / (unison - 1)) * 2 - 1) * detune * 35;
     c.detune.setValueAtTime(spread, time);
-    c.frequency.setValueAtTime(glideFrom !== null ? glideFrom : f, time);
+    const from = glideFrom !== null ? Math.max(20, glideFrom) : f;
+    c.frequency.setValueAtTime(from, time);
     if (glideFrom !== null) c.frequency.exponentialRampToValueAtTime(f, time + glideSec);
-    mg.connect(c.frequency);
     c.connect(bus);
     c.start(time);
     c.stop(endAll);
-    carriers.push(c);
+    carrierOscs.push(c);
+  }
+  bus.connect(filt);
+
+  /* --- route the graph: each edge feeds the target's frequency param --- */
+  for (const [from, to] of graph.edges) {
+    const src = modIdx.get(from);
+    if (!src) continue;
+    if (to === 0) {
+      for (const c of carrierOscs) src.connect(c.frequency);
+    } else {
+      const t = modOsc.get(to);
+      if (t) src.connect(t.frequency);
+    }
   }
 
-  /* one LFO, switchable target */
+  /* --- feedback loop on the chain head: op → delay → fb → own frequency --- */
+  if (graph.fb !== null && fbAmt >= 0.01) {
+    const src = modIdx.get(graph.fb);
+    const osc = modOsc.get(graph.fb);
+    if (src && osc) {
+      const delay = ctx.createDelay(0.05);
+      delay.delayTime.value = 128 / ctx.sampleRate;
+      const fbGain = ctx.createGain();
+      fbGain.gain.value = clamp(fbAmt * 2.2, 0, 2.2);
+      src.connect(delay).connect(fbGain).connect(osc.frequency);
+    }
+  }
+
+  /* --- one LFO, switchable target --- */
   if (lfoDepth > 0.01) {
     const lfo = ctx.createOscillator();
     lfo.type = "sine";
@@ -157,8 +225,9 @@ export function fm1Voice(ctx: BaseAudioContext, dest: AudioNode, p: VoiceParams,
       la.gain.value = 0.5 * lfoDepth; // tremolo — gain param is additive, keep small
       la.connect(g.gain);
     } else {
-      la.gain.value = 60 * lfoDepth; // ±60 cents at full depth
-      for (const c of carriers) la.connect(c.detune);
+      la.gain.value = 60 * lfoDepth; // ±60 cents at full depth — every op detune
+      for (const c of carrierOscs) la.connect(c.detune);
+      for (const o of modOsc.values()) la.connect(o.detune);
     }
     lfo.start(time);
     lfo.stop(endAll);

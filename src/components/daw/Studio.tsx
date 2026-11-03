@@ -34,7 +34,7 @@ import {
 } from "@/lib/daw/types";
 import { getEngine } from "@/lib/daw/engine";
 import { loadCurrent, sanitizeProject, saveCurrent, saveProject } from "@/lib/daw/storage";
-import { peekDeviceSelect, requestDeviceSelect } from "@/lib/daw/skazi";
+import { peekDeviceSelect, requestDeviceSelect, skaziStore } from "@/lib/daw/skazi";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -311,6 +311,7 @@ export function Studio({ onClose }: { onClose: () => void }) {
     (window as unknown as { __intellidaw?: unknown }).__intellidaw = {
       getEngine,
       getProject: () => projectRef.current,
+      getSkaziStore: () => skaziStore,
       /* full-song offline render → 16-bit PCM WAV blob (measurable QA) */
       renderWav: (bars?: number) => {
         const p = projectRef.current;

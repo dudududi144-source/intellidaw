@@ -245,14 +245,14 @@ const CAT_BIAS: Record<string, Record<string, Record<string, number>>> = {
     BLACKHOLE: { algo: 9, size: 1, decay: 1, duck: 0.3 },
   },
   fm1: {
-    BASS: { ratio: 0.06, cutoff: 0.28, modLevel: 0.55, sustain: 0.5 },
-    LEADS: { cutoff: 0.65, modLevel: 0.6, sustain: 0.55 },
-    KEYS: { decay: 0.4, sustain: 0.35, modLevel: 0.45 },
-    PADS: { attack: 0.7, release: 0.75, modLevel: 0.4 },
-    BELLS: { ratio: 0.32, decay: 0.5, sustain: 0.05, modLevel: 0.5 },
-    PLUCKS: { decay: 0.2, sustain: 0.05, cutoff: 0.5 },
-    FX: { fb: 0.7, lfoDepth: 0.6, release: 0.7 },
-    PERC: { decay: 0.12, sustain: 0, release: 0.1 },
+    BASS: { algo: 0, ratio: 0.5, cutoff: 0.28, modLevel: 0.55, sustain: 0.5 },
+    LEADS: { algo: 3, cutoff: 0.65, modLevel: 0.6, sustain: 0.55 },
+    KEYS: { algo: 7, decay: 0.4, sustain: 0.35, modLevel: 0.45 },
+    PADS: { algo: 1, attack: 0.7, release: 0.75, modLevel: 0.4 },
+    BELLS: { algo: 6, ratio: 1.41, decay: 0.5, sustain: 0.05, modLevel: 0.5 },
+    PLUCKS: { algo: 2, decay: 0.2, sustain: 0.05, cutoff: 0.5 },
+    FX: { algo: 5, fb: 0.7, lfoDepth: 0.6, release: 0.7 },
+    PERC: { algo: 7, decay: 0.12, sustain: 0, release: 0.1 },
   },
 };
 
