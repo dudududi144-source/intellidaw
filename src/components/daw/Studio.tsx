@@ -195,14 +195,10 @@ export function Studio({ onClose }: { onClose: () => void }) {
   const skipHist = useRef(false);
   const [histLen, setHistLen] = useState({ past: 0, future: 0 });
   const [histSnap, setHistSnap] = useState<{ past: Project[]; future: Project[] }>({ past: [], future: [] });
-  const syncHistLen = useCallback(
-    () =>
-      setHistLen({
-        past: past.current.length,
-        future: future.current.length,
-      }) || setHistSnap({ past: [...past.current], future: [...future.current] }),
-    []
-  );
+  const syncHistLen = useCallback(() => {
+    setHistLen({ past: past.current.length, future: future.current.length });
+    setHistSnap({ past: [...past.current], future: [...future.current] });
+  }, []);
 
   useEffect(() => {
     projectRef.current = project;
