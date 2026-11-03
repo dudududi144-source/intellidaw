@@ -137,7 +137,7 @@ const VIEWS: Array<{ id: View; label: string; icon: string; hint: string }> = [
     id: "skazi",
     label: "SKAZI",
     icon: "✧",
-    hint: "19 extra devices — pick one, tweak it, drop its pattern onto a track",
+    hint: "20 bundle devices + 3 originals — pick one, tweak it, browse its presets, drop patterns onto tracks",
   },
   {
     id: "assistant",

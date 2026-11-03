@@ -1,11 +1,13 @@
 /* ------------------------------------------------------------------ */
 /*  Intellidaw — SKAZI Bundle devices                                  */
 /*  All 19 free tools by Asher Swissa (github.com/slazoasher/          */
-/*  skazi-bundle), recreated as native Web Audio devices.  Original    */
-/*  implementation — no third-party code or assets are used.           */
+/*  skazi-bundle) plus the FM-1 build, recreated as native Web         */
+/*  Audio devices.  Original implementation — no third-party code      */
+/*  or assets are used.                                                */
 /* ------------------------------------------------------------------ */
 
 import { uid, type Note } from "./types";
+import { bankCount, getBankPreset } from "./presetBank";
 
 /* ---------------- folders & kinds ---------------- */
 
@@ -155,7 +157,7 @@ export const SKAZI_DEVICES: SkaziDevice[] = [
     tagline: "Psytrance wavetable synth",
     desc: "Growl and yoy tables, dual warp slots per oscillator, fat unison blending — the psytrance cube. Lime-on-black attitude.",
     accent: "#a3e635",
-    presetsCount: 106,
+    presetsCount: 306,
     params: [
       f("table", "TABLE", 0, 7, 2, { step: 1, options: WT_NAMES, fmt: (v) => WT_NAMES[v | 0] }),
       f("unison", "UNISON", 1, 7, 6, { step: 1, fmt: (v) => `${v} vce` }),
@@ -357,6 +359,7 @@ export const SKAZI_DEVICES: SkaziDevice[] = [
       f("depth", "DEPTH", 0, 1, 0.6, { fmt: pct }),
       f("curve", "CURVE", 0, 1, 0.5, { fmt: (v) => (v < 0.5 ? "sine" : "triangle") }),
     ],
+    presetsCount: 105,
   },
   {
     id: "shaksuka",
@@ -366,6 +369,7 @@ export const SKAZI_DEVICES: SkaziDevice[] = [
     tagline: "Random chop & glitch FX",
     desc: "Throws dice on your audio — random chops, stutters, crush bursts and pitch flips in tempo.",
     accent: "#e5533d",
+    presetsCount: 509,
     params: [
       f("rate", "RATE", 0, 2, 1, { step: 1, options: ["1/8", "1/16", "1/32"], fmt: (v) => ["1/8", "1/16", "1/32"][v | 0] }),
       f("amount", "AMOUNT", 0, 1, 0.5, { fmt: pct }),
@@ -510,6 +514,7 @@ export const SKAZI_DEVICES: SkaziDevice[] = [
       f("width", "WIDTH", 0, 2, 1.2, { fmt: (v) => `${Math.round(v * 100)}%` }),
       f("mix", "MIX", 0, 1, 0.6, { fmt: pct }),
     ],
+    presetsCount: 118,
   },
   {
     id: "skverb",
@@ -614,7 +619,39 @@ const extras: SkaziDevice[] = [
   },
 ];
 
-SKAZI_DEVICES.push(...extras);
+/* ============ FM-1 — native build of the uploaded FM-1.vst3 ============ */
+const fm1Device: SkaziDevice = {
+  id: "fm1",
+  name: "FM-1",
+  folder: "Synths",
+  kind: "synth",
+  tagline: "2-operator FM synth · native build of the uploaded FM-1.vst3",
+  desc: "Classic operator FM, rebuilt for the browser: modulator→carrier with ratio and feedback, dual envelopes, resonant filter with its own envelope, syncable LFO (pitch/filter/amp), glide and up to 4-voice unison. 128 presets, playable from your keyboard, MIDI-in and the performance keyboard.",
+  accent: "#7ec8a9",
+  presetsCount: 128,
+  params: [
+    f("ratio", "RATIO", 0.25, 16, 1, { step: 0.25, fmt: (v) => `${v.toFixed(2).replace(/\.00$/, "")}:1` }),
+    f("modLevel", "MOD LEVEL", 0, 1, 0.35, { fmt: pct }),
+    f("fb", "FEEDBACK", 0, 1, 0.12, { fmt: pct }),
+    f("attack", "ATTACK", 0.002, 2, 0.01, { step: 0.002, fmt: (v) => `${Math.round(v * 1000)}ms` }),
+    f("decay", "DECAY", 0.02, 4, 0.35, { step: 0.02, fmt: (v) => `${(v * 1000) | 0}ms` }),
+    f("sustain", "SUSTAIN", 0, 1, 0.55, { fmt: pct }),
+    f("release", "RELEASE", 0.02, 6, 0.5, { step: 0.02, fmt: (v) => `${(v * 1000) | 0}ms` }),
+    f("cutoff", "CUTOFF", 0, 1, 0.7, { fmt: hzN }),
+    f("res", "RES", 0, 18, 1.5, { step: 0.1 }),
+    f("fenv", "FILTER ENV", 0, 1, 0.25, { fmt: pct }),
+    f("lfoRate", "LFO RATE", 0.1, 20, 4.5, { step: 0.1, fmt: (v) => `${v.toFixed(1)}Hz` }),
+    f("lfoDepth", "LFO DEPTH", 0, 1, 0.12, { fmt: pct }),
+    f("lfoTarget", "LFO TARGET", 0, 2, 0, { step: 1, options: ["PITCH", "FILTER", "AMP"], fmt: (v) => ["PITCH", "FILTER", "AMP"][v | 0] }),
+    f("glide", "GLIDE", 0, 1, 0, { fmt: (v) => `${Math.round(v * 500)}ms` }),
+    f("unison", "UNISON", 1, 4, 1, { step: 1, fmt: (v) => `${v} vce` }),
+    f("detune", "DETUNE", 0, 1, 0.3, { fmt: pct }),
+    f("drive", "DRIVE", 0, 1, 0.1, { fmt: pct }),
+    f("level", "LEVEL", 0, 1, 0.7, { fmt: pct }),
+  ],
+};
+
+SKAZI_DEVICES.push(...extras, fm1Device);
 
 /* ------------------------------------------------------------------ */
 /*  Upstream repo inventory — every official device mapped to its      */
@@ -1010,6 +1047,15 @@ export interface SkaziState {
   seq: Record<string, SeqPattern>;
   godSeed: number;
   favorites: string[];
+  /** last applied procedural bank preset per device (see presetBank.ts) */
+  lastPreset: Record<string, PresetRef>;
+}
+
+/** reference to the last applied bank preset (no params — resolved lazily) */
+export interface PresetRef {
+  index: number;
+  name: string;
+  category: string;
 }
 
 export interface SeqStep {
@@ -1056,6 +1102,7 @@ function initialState(): SkaziState {
     seq: { tbon303: defaultSeq("tbon303"), skacid: defaultSeq("skacid") },
     godSeed: 1,
     favorites: ["skazi", "subich"],
+    lastPreset: {},
   };
 }
 
@@ -1079,6 +1126,22 @@ function loadState(): SkaziState {
     if (typeof saved.godSeed === "number") base.godSeed = saved.godSeed;
     if (Array.isArray(saved.favorites)) {
       base.favorites = saved.favorites.filter((id) => SKAZI_DEVICES.some((d) => d.id === id));
+    }
+    if (saved.lastPreset && typeof saved.lastPreset === "object") {
+      const lp: SkaziState["lastPreset"] = {};
+      for (const [id, ref] of Object.entries(saved.lastPreset)) {
+        if (
+          deviceById(id) &&
+          ref &&
+          typeof ref === "object" &&
+          typeof ref.index === "number" &&
+          typeof ref.name === "string" &&
+          typeof ref.category === "string"
+        ) {
+          lp[id] = { index: ref.index, name: ref.name, category: ref.category };
+        }
+      }
+      base.lastPreset = lp;
     }
   } catch {
     /* corrupted state → fresh */
@@ -1141,6 +1204,8 @@ class SkaziStore {
     } else {
       this.state.instruments[deviceId] = { ...defaultParams(d), ...vals };
     }
+    // a factory preset replaces any bank preset selection
+    delete this.state.lastPreset[deviceId];
     this.emit();
   }
 
@@ -1161,6 +1226,7 @@ class SkaziStore {
       params[p.id] = p.step ? Math.round(r / p.step) * p.step : r;
     }
     this.state.fx[deviceId] = { enabled: true, params };
+    delete this.state.lastPreset[deviceId];
     this.emit();
   }
 
@@ -1231,7 +1297,81 @@ class SkaziStore {
       params[p.id] = p.step ? Math.round(r / p.step) * p.step : r;
     }
     this.state.instruments[deviceId] = params;
+    delete this.state.lastPreset[deviceId];
     this.emit();
+  }
+
+  /* ---------------- procedural bank presets (presetBank.ts) ---------------- */
+
+  /** runtime undo stack per device: snapshots taken BEFORE each bank apply */
+  private undoStacks: Record<string, Array<{ params: Record<string, number>; preset: PresetRef | null }>> = {};
+  /** runtime A/B side B snapshots per device (not persisted) */
+  private abSides: Record<string, Record<string, number>> = {};
+
+  private currentParams(deviceId: string): Record<string, number> {
+    const d = deviceById(deviceId);
+    if (!d) return {};
+    if (d.kind === "fx") return { ...(this.state.fx[deviceId]?.params ?? defaultParams(d)) };
+    return { ...(this.state.instruments[deviceId] ?? defaultParams(d)) };
+  }
+
+  private putParams(deviceId: string, params: Record<string, number>, enabled?: boolean) {
+    const d = deviceById(deviceId);
+    if (!d) return;
+    if (d.kind === "fx") {
+      const cur = this.state.fx[deviceId] ?? { enabled: false, params: defaultParams(d) };
+      this.state.fx[deviceId] = { ...cur, enabled: enabled ?? cur.enabled, params };
+    } else {
+      this.state.instruments[deviceId] = params;
+    }
+  }
+
+  /** apply a deterministic bank preset (params like applyPreset; fx is enabled) */
+  applyBankPreset(deviceId: string, index: number) {
+    const d = deviceById(deviceId);
+    if (!d || bankCount(d) <= 0) return;
+    const bp = getBankPreset(d, index);
+    const stack = (this.undoStacks[deviceId] ??= []);
+    stack.push({ params: this.currentParams(deviceId), preset: this.state.lastPreset[deviceId] ?? null });
+    if (stack.length > 8) stack.shift();
+    this.putParams(deviceId, { ...defaultParams(d), ...bp.params }, true);
+    this.state.lastPreset[deviceId] = { index: bp.index, name: bp.name, category: bp.category };
+    this.emit();
+  }
+
+  /** restore the params (and selection) from before the last bank apply */
+  presetUndo(deviceId: string) {
+    const stack = this.undoStacks[deviceId];
+    if (!stack || stack.length === 0) return;
+    const snap = stack.pop()!;
+    this.putParams(deviceId, snap.params);
+    if (snap.preset) this.state.lastPreset[deviceId] = snap.preset;
+    else delete this.state.lastPreset[deviceId];
+    this.emit();
+  }
+
+  /** snapshot current params as the B side for A/B compare (runtime only) */
+  abStore(deviceId: string) {
+    this.abSides[deviceId] = this.currentParams(deviceId);
+  }
+
+  /** swap current params ↔ B side; returns whether a B side exists */
+  abToggle(deviceId: string): boolean {
+    const b = this.abSides[deviceId];
+    if (!b) return false;
+    const cur = this.currentParams(deviceId);
+    this.abSides[deviceId] = cur;
+    this.putParams(deviceId, b);
+    this.emit();
+    return true;
+  }
+
+  abActive(deviceId: string): boolean {
+    return !!this.abSides[deviceId];
+  }
+
+  currentBankPreset(deviceId: string): PresetRef | null {
+    return this.state.lastPreset[deviceId] ?? null;
   }
 
   resetAll() {

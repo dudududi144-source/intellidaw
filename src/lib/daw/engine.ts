@@ -1353,6 +1353,32 @@ export class DawEngine {
     scheduleSkaziVoice(ctx, dest, deviceId, params, pitch, ctx.currentTime + 0.01, durSec, vel);
   }
 
+  /** render one skazi voice offline and return objective level measurements
+   *  (used by the device audition QA — peak dBFS + RMS on a clean 44.1k render) */
+  async measureSkaziVoice(deviceId: string, pitch = 48, durSec = 0.6, vel = 0.9): Promise<{ peak: number; rms: number }> {
+    const sr = 44100;
+    const off = new OfflineAudioContext(2, Math.ceil(sr * (durSec + 1.5)), sr);
+    const params = (skaziStore.get().instruments[deviceId] ?? {}) as VoiceParams;
+    scheduleSkaziVoice(off, off.destination, deviceId, params, pitch, 0.05, durSec, vel);
+    const buf = await off.startRendering();
+    let peak = 0;
+    let sum = 0;
+    let n = 0;
+    for (let c = 0; c < buf.numberOfChannels; c++) {
+      const d = buf.getChannelData(c);
+      for (let i = 0; i < d.length; i++) {
+        const a = Math.abs(d[i]);
+        if (a > peak) peak = a;
+        sum += d[i] * d[i];
+        n++;
+      }
+    }
+    return {
+      peak: Math.round(20 * Math.log10(Math.max(peak, 1e-9)) * 100) / 100,
+      rms: Math.round(20 * Math.log10(Math.max(Math.sqrt(sum / n), 1e-9)) * 100) / 100,
+    };
+  }
+
   /** audition a MIDI GOD pattern (synth roles) or drum steps */
   async previewPattern(deviceId: string, notes: Note[], bars: number, drumSteps?: boolean[]): Promise<number> {
     const ctx = await this.ensure();

@@ -8,6 +8,7 @@
 import type { SkaziDevice, SeqPattern } from "./skazi";
 import { deviceById, skaziStore, type SkaziState } from "./skazi";
 import { cachedNoise } from "./noise";
+import { fm1Voice } from "./fm1";
 
 const midiHz = (p: number) => 440 * Math.pow(2, (p - 69) / 12);
 export const skaziCutoffHz = (c: number) => 40 * Math.pow(300, Math.min(1, Math.max(0, c))); // 40Hz..12kHz
@@ -597,8 +598,15 @@ export function kickassVoice(ctx: BaseAudioContext, dest: AudioNode, p: VoicePar
   o.frequency.exponentialRampToValueAtTime(sweepF, time + 0.009 + holdS + decS);
 
   const g = ctx.createGain();
-  g.gain.setValueAtTime(vel * 0.9, time);
-  g.gain.setValueAtTime(vel * 0.9, time + 0.009 + holdS);
+  // adaptive trim: the 3-band EQ can add up to +12 dB per band — attenuate
+  // by the actual boost so the dry voice can never clip digital full scale
+  const boostDb =
+    Math.max(0, (p.eqLo - 0.5) * 24) +
+    Math.max(0, (p.eqMid - 0.5) * 24) * 0.4 +
+    Math.max(0, (p.eqHi - 0.5) * 24) * 0.25;
+  const trim = 0.9 / Math.pow(10, boostDb / 20);
+  g.gain.setValueAtTime(vel * trim, time);
+  g.gain.setValueAtTime(vel * trim, time + 0.009 + holdS);
   g.gain.exponentialRampToValueAtTime(0.001, time + 0.009 + holdS + decS);
 
   // 3-band EQ
@@ -748,6 +756,7 @@ export function scheduleSkaziVoice(
     case "kube": voiceWavetable(ctx, dest, p, pitch, vel, time, dur, true); break;
     case "subich": voiceSubich(ctx, dest, p, pitch, vel, time, dur); break;
     case "kickass": kickassVoice(ctx, dest, p, vel, time); break;
+    case "fm1": fm1Voice(ctx, dest, p, pitch, vel, time, dur); break;
     /* Intellidaw extras */
     case "limonana": voiceLimonana(ctx, dest, p, pitch, vel, time, dur); break;
     case "sabich": voiceSabich(ctx, dest, p, pitch, vel, time, dur); break;

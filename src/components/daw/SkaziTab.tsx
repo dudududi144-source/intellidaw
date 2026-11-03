@@ -22,11 +22,13 @@ import {
 } from "@/lib/daw/skazi";
 import { SkaziSequencer } from "@/lib/daw/skaziAudio";
 import { getEngine } from "@/lib/daw/engine";
+import { bankCount, fmtIndex, randomBankIndex } from "@/lib/daw/presetBank";
 import { makeDrumTrack, makeSynthTrack, type Project, type SynthTrack } from "@/lib/daw/types";
 import { cn } from "@/lib/utils";
 import { Search, Star } from "lucide-react";
 import { ParamRow, PanelTitle } from "./ui";
 import { PianoKeyboard } from "./KeysTab";
+import { PresetBrowser, auditionBankPreset, loadPresetFavs, togglePresetFav } from "./PresetBrowser";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 
@@ -126,24 +128,124 @@ function ParamsGrid({
   );
 }
 
-function PresetChips({ device, onPick }: { device: SkaziDevice; onPick: (name: string) => void }) {
+/* ---------------- preset bar + factory chips ---------------- */
+
+const PRESET_BTN =
+  "flex h-7 min-w-7 items-center justify-center rounded-md border border-white/10 bg-white/[0.03] px-2 font-mono text-[10px] uppercase tracking-wider text-[#a89f91] transition-colors hover:border-[#f2a43a]/40 hover:text-[#f0ece4] disabled:opacity-40";
+
+/** the original hand-written factory patches (kept as a small row under the bar) */
+function FactoryChips({ device }: { device: SkaziDevice }) {
   if (!device.presets) return null;
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="font-mono text-[9px] uppercase tracking-widest text-[#a89f91]/60">Factory</span>
       {Object.keys(device.presets).map((name) => (
         <button
           key={name}
-          onClick={() => onPick(name)}
+          onClick={() => skaziStore.applyPreset(device.id, name)}
           className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-[#a89f91] transition-colors hover:border-[#f2a43a]/50 hover:text-[#f0ece4]"
         >
           {name}
         </button>
       ))}
-      {device.presetsCount && (
-        <span className="self-center font-mono text-[9px] uppercase tracking-widest text-[#a89f91]/60">
-          +{device.presetsCount.toLocaleString()} in the desktop plugin
-        </span>
-      )}
+    </div>
+  );
+}
+
+/** one-line bank control: ‹ preset › + BROWSE / 🎲 / A/B / UNDO / ★ */
+function PresetBar({ device }: { device: SkaziDevice }) {
+  const state = useSkaziState();
+  const [browse, setBrowse] = useState(false);
+  const [, setTick] = useState(0); // re-render after runtime-only A/B / favorite writes
+  const n = bankCount(device);
+  const cur = state.lastPreset?.[device.id] ?? null;
+  const abOn = skaziStore.abActive(device.id);
+  const curFav = cur ? (loadPresetFavs()[device.id] ?? []).includes(cur.index) : false;
+
+  // no procedural bank (e.g. Intellidaw extras) → factory chips only
+  if (n <= 0) return <FactoryChips device={device} />;
+
+  const applyIdx = (i: number) => {
+    skaziStore.applyBankPreset(device.id, i);
+    auditionBankPreset(device, i);
+  };
+  const idx = cur?.index ?? -1;
+  const step = (dir: 1 | -1) => applyIdx(idx < 0 ? (dir === 1 ? 0 : n - 1) : (idx + dir + n) % n);
+  const onRandom = () => applyIdx(randomBankIndex(device, idx >= 0 ? idx : undefined));
+  const onAB = () => {
+    if (!skaziStore.abActive(device.id)) {
+      skaziStore.abStore(device.id);
+      setTick((t) => t + 1); // abStore is runtime-only → no store emit
+    } else {
+      skaziStore.abToggle(device.id);
+    }
+  };
+  const onStar = () => {
+    if (!cur) return;
+    togglePresetFav(device.id, cur.index);
+    setTick((t) => t + 1);
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-white/10 bg-black/25 px-2 py-1.5">
+        <button onClick={() => step(-1)} className={PRESET_BTN} aria-label={`Previous ${device.name} bank preset`}>
+          ‹
+        </button>
+        <button onClick={() => step(1)} className={PRESET_BTN} aria-label={`Next ${device.name} bank preset`}>
+          ›
+        </button>
+        <div
+          className="min-w-0 flex-1 truncate px-1 font-mono text-[11px] uppercase tracking-wider"
+          aria-live="polite"
+          aria-label={`Current preset: ${cur ? `${cur.name}, ${cur.category}` : "INIT"}`}
+        >
+          {cur ? (
+            <>
+              <span className="font-bold" style={{ color: device.accent }}>
+                {cur.name}
+              </span>
+              <span className="text-[#a89f91]"> · {cur.category}</span>
+              <span className="ml-2 text-[9px] text-[#a89f91]/50">{fmtIndex(cur.index)}</span>
+            </>
+          ) : (
+            <span className="text-[#a89f91]">INIT</span>
+          )}
+        </div>
+        <button
+          onClick={() => setBrowse(true)}
+          className={cn(PRESET_BTN, "text-[#f2a43a] hover:text-[#ffcb7a]")}
+          aria-label={`Browse all ${n.toLocaleString()} ${device.name} presets`}
+        >
+          BROWSE
+          <span className="hidden text-[9px] text-[#a89f91] sm:inline">·{n.toLocaleString()}</span>
+        </button>
+        <button onClick={onRandom} className={PRESET_BTN} aria-label={`Random ${device.name} bank preset`}>
+          🎲
+        </button>
+        <button
+          onClick={onAB}
+          className={cn(PRESET_BTN, abOn && "border-[#f2a43a]/50 bg-[#f2a43a]/10 text-[#f2a43a]")}
+          aria-pressed={abOn}
+          aria-label={abOn ? "A/B active — press to swap A and B" : "Store current sound as B, then toggle A/B"}
+        >
+          A/B
+        </button>
+        <button onClick={() => skaziStore.presetUndo(device.id)} className={PRESET_BTN} aria-label="Undo last bank preset">
+          UNDO
+        </button>
+        <button
+          onClick={onStar}
+          disabled={!cur}
+          className={cn(PRESET_BTN, curFav && "border-[#f2a43a]/50 bg-[#f2a43a]/10 text-[#f2a43a]")}
+          aria-pressed={curFav}
+          aria-label={cur ? (curFav ? `Remove ${cur.name} from favorites` : `Add ${cur.name} to favorites`) : "No bank preset selected"}
+        >
+          <Star className={cn("h-3 w-3", curFav && "fill-current")} aria-hidden />
+        </button>
+      </div>
+      <FactoryChips device={device} />
+      <PresetBrowser device={device} open={browse} onClose={() => setBrowse(false)} />
     </div>
   );
 }
@@ -179,12 +281,10 @@ function SynthPanel({
   device,
   params,
   onSet,
-  onPreset,
 }: {
   device: SkaziDevice;
   params: Record<string, number>;
   onSet: (id: string, v: number) => void;
-  onPreset: (name: string) => void;
 }) {
   const [held, setHeld] = useState<number[]>([]);
   const play = useCallback(
@@ -212,7 +312,7 @@ function SynthPanel({
 
   return (
     <div className="space-y-4">
-      <PresetChips device={device} onPick={onPreset} />
+      <PresetBar key={device.id} device={device} />
       <PianoKeyboard onPlay={play} low={60} high={76} keyMap={KEY_MAP} />
       <div
         className="flex items-center gap-2 rounded-lg border border-white/5 bg-black/20 px-3 py-2"
@@ -236,13 +336,11 @@ function SeqPanel({
   params,
   seq,
   onSet,
-  onPreset,
 }: {
   device: SkaziDevice;
   params: Record<string, number>;
   seq: ReturnType<typeof defaultSeq>;
   onSet: (id: string, v: number) => void;
-  onPreset: (name: string) => void;
 }) {
   const [playing, setPlaying] = useState(false);
   const [curStep, setCurStep] = useState(-1);
@@ -304,7 +402,7 @@ function SeqPanel({
 
   return (
     <div className="space-y-4">
-      <PresetChips device={device} onPick={onPreset} />
+      <PresetBar key={device.id} device={device} />
 
       <div className="flex flex-wrap items-center gap-2">
         <FireButton onClick={toggle} accent={playing ? "#e5533d" : device.accent}>
@@ -397,12 +495,10 @@ function KickPanel({
   device,
   params,
   onSet,
-  onPreset,
 }: {
   device: SkaziDevice;
   params: Record<string, number>;
   onSet: (id: string, v: number) => void;
-  onPreset: (name: string) => void;
 }) {
   const fire = () => void getEngine().previewSkazi(device.id, 36, 0.01);
   useEffect(() => {
@@ -419,7 +515,7 @@ function KickPanel({
   }, []);
   return (
     <div className="space-y-4">
-      <PresetChips device={device} onPick={onPreset} />
+      <PresetBar key={device.id} device={device} />
       <div className="flex items-center gap-3">
         <FireButton onClick={fire} accent={device.accent} big>
           🥁 FIRE KICK
@@ -437,12 +533,10 @@ function RiserPanel({
   device,
   params,
   onSet,
-  onPreset,
 }: {
   device: SkaziDevice;
   params: Record<string, number>;
   onSet: (id: string, v: number) => void;
-  onPreset: (name: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const fire = async () => {
@@ -454,7 +548,7 @@ function RiserPanel({
   };
   return (
     <div className="space-y-4">
-      <PresetChips device={device} onPick={onPreset} />
+      <PresetBar key={device.id} device={device} />
       <div className="flex items-center gap-3">
         <FireButton onClick={fire} accent={device.accent} big>
           {busy ? "▲ RISING…" : "⤒ FIRE RISER"}
@@ -547,6 +641,7 @@ function GodPanel({
 
   return (
     <div className="space-y-4">
+      <PresetBar key={device.id} device={device} />
       <ParamsGrid device={device} params={params} onSet={onSet} accent={device.accent} />
       <div className="flex flex-wrap items-center gap-2">
         <FireButton onClick={doGenerate} accent={device.accent}>
@@ -596,12 +691,10 @@ function FxPanel({
   device,
   fx,
   onSet,
-  onPreset,
 }: {
   device: SkaziDevice;
   fx: { enabled: boolean; params: Record<string, number> };
   onSet: (id: string, v: number) => void;
-  onPreset: (name: string) => void;
 }) {
   const index = SKAZI_DEVICES.filter((d) => d.kind === "fx").findIndex((d) => d.id === device.id) + 1;
   return (
@@ -619,7 +712,7 @@ function FxPanel({
           slot {index}/10 · affects playback & export
         </span>
       </div>
-      <PresetChips device={device} onPick={onPreset} />
+      <PresetBar key={device.id} device={device} />
       <div className="flex items-center gap-2">
         <button
           onClick={() => skaziStore.randomizeFx(device.id)}
@@ -663,7 +756,6 @@ export function SkaziTab({
     (id: string, v: number) => skaziStore.setParam(sel, id, v),
     [sel]
   );
-  const onPreset = useCallback((name: string) => skaziStore.applyPreset(sel, name), [sel]);
 
   const instParams = state.instruments[sel] ?? {};
   const fxState = state.fx[sel] ?? { enabled: false, params: {} };
@@ -867,24 +959,16 @@ export function SkaziTab({
           </details>
         )}
 
-        {device.kind === "synth" && (
-          <SynthPanel device={device} params={instParams} onSet={onSet} onPreset={onPreset} />
-        )}
+        {device.kind === "synth" && <SynthPanel device={device} params={instParams} onSet={onSet} />}
         {device.kind === "sequencer" && (
-          <SeqPanel device={device} params={instParams} seq={seq} onSet={onSet} onPreset={onPreset} />
+          <SeqPanel device={device} params={instParams} seq={seq} onSet={onSet} />
         )}
-        {device.kind === "kick" && (
-          <KickPanel device={device} params={instParams} onSet={onSet} onPreset={onPreset} />
-        )}
-        {device.kind === "riser" && (
-          <RiserPanel device={device} params={instParams} onSet={onSet} onPreset={onPreset} />
-        )}
+        {device.kind === "kick" && <KickPanel device={device} params={instParams} onSet={onSet} />}
+        {device.kind === "riser" && <RiserPanel device={device} params={instParams} onSet={onSet} />}
         {device.kind === "generator" && (
           <GodPanel device={device} params={instParams} onSet={onSet} updateProject={updateProject} />
         )}
-        {device.kind === "fx" && (
-          <FxPanel device={device} fx={fxState} onSet={onSet} onPreset={onPreset} />
-        )}
+        {device.kind === "fx" && <FxPanel device={device} fx={fxState} onSet={onSet} />}
 
         {device.kind === "fx" && sel === "pitapump" && (
           <p className="mt-4 font-mono text-[10px] leading-relaxed text-[#a89f91]">
