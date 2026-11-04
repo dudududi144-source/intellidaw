@@ -19,6 +19,16 @@ import { cn } from "@/lib/utils";
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
+/** console screw — decorative panel fastener used on the rails */
+export function Screw({ className }: { className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn("h-1.5 w-1.5 shrink-0 rounded-full bg-black/70 ring-1 ring-white/10", className)}
+    />
+  );
+}
+
 /* angle helpers — 0° is 12 o'clock, sweep runs -135°..+135° */
 function polar(cx: number, cy: number, r: number, deg: number) {
   const a = ((deg - 90) * Math.PI) / 180;

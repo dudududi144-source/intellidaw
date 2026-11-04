@@ -856,6 +856,8 @@ export function Studio({ onClose }: { onClose: () => void }) {
             onSelect={selectFromTimeline}
             onSeek={seek}
             updateProject={updateProject}
+            getLevel={getLevel}
+            onEditSelected={() => setView("editor")}
           />
         </div>
       )}
@@ -1570,14 +1572,6 @@ export function Studio({ onClose }: { onClose: () => void }) {
                 {v.label}
               </button>
             ))}
-            {view === "arrange" && effSel && (
-              <button
-                onClick={() => setView("editor")}
-                className="ml-auto hidden h-7 shrink-0 items-center gap-1.5 rounded-lg border border-[#f2a43a]/40 bg-[#f2a43a]/10 px-2.5 font-mono text-[10px] uppercase tracking-wider text-[#f2a43a] hover:bg-[#f2a43a]/20 sm:flex"
-              >
-                edit {selTrackObj?.name ?? ""} ▸
-              </button>
-            )}
             <button
               onClick={() => setDeviceSheet(true)}
               className="ml-auto flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 font-mono text-[10px] uppercase tracking-wider text-[#a89f91] lg:hidden"

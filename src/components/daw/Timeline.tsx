@@ -5,12 +5,16 @@
 /*  together: sections ruler, one lane per track, playhead, seek.      */
 /*  Clicking a lane selects the track (editor + device follow),        */
 /*  clicking the ruler jumps playback to that bar.                     */
+/*  Console language: INTELLIDAW rail with screws, per-lane mini       */
+/*  level meters, selected-lane colour accent, strong bar boundaries.  */
 /* ------------------------------------------------------------------ */
 
 import { memo, useRef } from "react";
 import type { Project, Section, Track } from "@/lib/daw/types";
 import { SONG_BARS, STEP_COUNT, trackIcon } from "@/lib/daw/types";
 import { cn } from "@/lib/utils";
+import { Meter } from "./ui";
+import { Screw } from "./console";
 
 function laneBlocks(t: Track) {
   const one: Array<{ on: boolean; vel: number; step: number; len: number }> =
@@ -41,6 +45,8 @@ function TimelineInner({
   onSelect,
   onSeek,
   updateProject,
+  getLevel,
+  onEditSelected,
 }: {
   project: Project;
   currentStep: number; // absolute 0..63, -1 stopped
@@ -49,6 +55,10 @@ function TimelineInner({
   onSelect: (id: string) => void;
   onSeek: (absStep: number) => void;
   updateProject: (fn: (p: Project) => Project) => void;
+  /** live per-channel level (0..1) for the lane mini meters */
+  getLevel?: (id: string) => number;
+  /** open the note/drum editor for the selected lane */
+  onEditSelected?: () => void;
 }) {
   const gridRef = useRef<HTMLDivElement>(null);
 
@@ -64,15 +74,26 @@ function TimelineInner({
   const totalSteps = SONG_BARS * STEP_COUNT;
 
   return (
-    <div className="overflow-hidden rounded-xl border border-white/8 bg-[#14100d]">
-      {/* header */}
-      <div className="flex items-center justify-between border-b border-white/6 px-3 py-1.5">
-        <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-[#a89f91]">
-          Timeline · {SONG_BARS} bars
+    <div className="overflow-hidden rounded-xl border border-white/10 bg-[#0f0b08] shadow-[0_10px_40px_rgba(0,0,0,0.45)]">
+      {/* console rail */}
+      <div className="flex items-center gap-2.5 border-b border-black/60 bg-gradient-to-b from-[#241c11] to-[#171209] px-3 py-1.5">
+        <Screw />
+        <span className="font-mono text-[9px] font-bold tracking-[0.3em] text-[#f2a43a]">INTELLIDAW</span>
+        <span className="font-mono text-[7.5px] tracking-[0.2em] text-[#6f675c]">
+          ARRANGEMENT · {SONG_BARS} BARS · {project.tracks.length} TRACKS
         </span>
-        <span className="font-mono text-[9px] text-[#a89f91]/60">
-          click ruler to jump · click a lane to edit it
+        <span className="ml-auto hidden font-mono text-[7.5px] text-[#6f675c] sm:inline">
+          {project.bpm} BPM · {project.songKey} · click ruler to jump · click a lane to edit
         </span>
+        {onEditSelected && selectedId && (
+          <button
+            onClick={onEditSelected}
+            className="hidden h-5 shrink-0 items-center gap-1 rounded border border-[#f2a43a]/40 bg-[#f2a43a]/10 px-1.5 font-mono text-[8px] uppercase tracking-wider text-[#f2a43a] hover:bg-[#f2a43a]/20 sm:flex"
+          >
+            edit {project.tracks.find((t) => t.id === selectedId)?.name ?? ""} ▸
+          </button>
+        )}
+        <Screw />
       </div>
 
       {/* sections ruler */}
@@ -130,38 +151,60 @@ function TimelineInner({
               key={t.id}
               onClick={() => onSelect(t.id)}
               className={cn(
-                "flex w-full items-stretch border-b border-white/[0.04] text-left transition-colors last:border-b-0",
+                "relative flex w-full items-stretch border-b border-white/[0.04] text-left transition-colors last:border-b-0",
                 sel ? "bg-white/[0.06]" : "hover:bg-white/[0.03]"
               )}
               title={`Edit ${t.name}`}
             >
+              {/* selected-lane colour accent */}
+              <span
+                aria-hidden
+                className="absolute inset-y-0 left-0 w-[2px]"
+                style={{ background: sel ? t.color : "transparent", opacity: 0.9 }}
+              />
               {/* lane label */}
-              <span className="flex w-16 shrink-0 items-center gap-1.5 px-2 py-2">
-                <span
-                  aria-hidden
-                  className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-[9px]"
-                  style={{ background: `${t.color}22`, color: t.color }}
-                >
-                  {trackIcon(t)}
+              <span className="flex w-16 shrink-0 flex-col justify-center gap-1 px-2 py-2">
+                <span className="flex items-center gap-1.5">
+                  <span
+                    aria-hidden
+                    className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-[9px]"
+                    style={{ background: `${t.color}22`, color: t.color }}
+                  >
+                    {trackIcon(t)}
+                  </span>
+                  <span className="truncate text-[11px] font-medium text-[#f0ece4]">
+                    {t.name}
+                  </span>
+                  {t.muted && (
+                    <span className="font-mono text-[8px] font-bold text-[#e5533d]">M</span>
+                  )}
                 </span>
-                <span className="truncate text-[11px] font-medium text-[#f0ece4]">
-                  {t.name}
-                </span>
-                {t.muted && (
-                  <span className="font-mono text-[8px] font-bold text-[#e5533d]">M</span>
+                {getLevel && (
+                  <span aria-hidden className="block h-[3px] w-11 overflow-hidden rounded-full bg-black/60">
+                    <Meter get={() => getLevel(t.id)} className="h-full w-full rounded-full bg-transparent ring-0" />
+                  </span>
                 )}
               </span>
 
               {/* lane grid */}
               <span className="relative min-w-0 flex-1 py-1.5 pr-2">
                 <span className="relative block h-7">
-                  {/* beat guides */}
+                  {/* bar boundaries — stronger */}
                   {[1, 2, 3].map((b) => (
                     <span
                       key={b}
                       aria-hidden
-                      className="absolute top-0 h-full w-px bg-white/[0.05]"
+                      className="absolute top-0 h-full w-px bg-white/[0.13]"
                       style={{ left: `${(b * STEP_COUNT * 100) / totalSteps}%` }}
+                    />
+                  ))}
+                  {/* beat guides */}
+                  {[0.25, 0.5, 0.75].map((f) => (
+                    <span
+                      key={f}
+                      aria-hidden
+                      className="absolute top-0 h-full w-px bg-white/[0.045]"
+                      style={{ left: `${f * 100}%` }}
                     />
                   ))}
                   {/* note / hit blocks */}

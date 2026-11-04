@@ -20,7 +20,7 @@ import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import type { BusName, Project, Track } from "@/lib/daw/types";
 import { cn } from "@/lib/utils";
 import { ProMeter } from "./ui";
-import { Knob, VFader } from "./console";
+import { Knob, Screw, VFader } from "./console";
 
 const BUS_OPTS: Array<{ id: BusName; label: string }> = [
   { id: "drums", label: "D" },
@@ -115,10 +115,6 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
       {children}
     </div>
   );
-}
-
-function Screw({ className }: { className?: string }) {
-  return <span aria-hidden className={cn("h-1.5 w-1.5 shrink-0 rounded-full bg-black/70 ring-1 ring-white/10", className)} />;
 }
 
 /* ------------------------------------------------------------------ */
