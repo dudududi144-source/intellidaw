@@ -6,7 +6,8 @@ import { defaultLiveFx } from "@/lib/daw/types";
 import { trackIcon } from "@/lib/daw/types";
 import { getEngine } from "@/lib/daw/engine";
 import { cn } from "@/lib/utils";
-import { PanelTitle, ParamRow } from "./ui";
+import { PanelTitle } from "./ui";
+import { Knob } from "./console";
 import { Button } from "@/components/ui/button";
 
 type FxKey = keyof LiveFxState;
@@ -152,11 +153,11 @@ function SessionTabInner({
         </span>
       </div>
 
-      {/* LIVE FX strip */}
+      {/* LIVE FX — rotary macro console */}
       <div className="rounded-xl border border-white/8 bg-[#14100d] p-3">
-        <div className="mb-2 flex items-center gap-2">
+        <div className="mb-3 flex items-center gap-2">
           <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#f2a43a]">Live FX</span>
-          <span className="font-mono text-[9px] text-[#a89f91]">shapes the whole mix</span>
+          <span className="font-mono text-[9px] text-[#a89f91]">macro knobs — shapes the whole mixdown</span>
           <button
             onClick={resetFx}
             className="ml-auto rounded-md bg-white/5 px-2 py-1 font-mono text-[9px] uppercase tracking-wider text-[#a89f91] hover:bg-white/10"
@@ -164,18 +165,22 @@ function SessionTabInner({
             reset
           </button>
         </div>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
           {FX_ROWS.map((row) => (
             <div
               key={row.key}
               title={row.hint}
-              className="rounded-lg bg-black/30 px-2.5 py-2 ring-1 ring-inset ring-white/5"
+              className="flex flex-col items-center gap-1.5 rounded-lg bg-black/30 px-2 py-2.5 ring-1 ring-inset ring-white/5"
             >
-              <ParamRow
-                label={row.label}
+              <Knob
+                size={44}
                 value={fx[row.key]}
                 onChange={(v) => setFx(row.key, v)}
+                resetTo={row.key === "filter" ? 1 : 0}
+                accent={row.key === "filter" ? "#8fbf6b" : row.key === "stutter" ? "#e5533d" : "#f2a43a"}
+                label={row.label}
                 format={(v) => `${Math.round(v * 100)}%`}
+                title={row.hint}
               />
             </div>
           ))}

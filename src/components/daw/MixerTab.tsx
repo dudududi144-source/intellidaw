@@ -1,20 +1,26 @@
 "use client";
 
 /* ------------------------------------------------------------------ */
-/*  Mixer — the console                                                */
+/*  Mixer — THE CONSOLE                                                */
 /*                                                                     */
-/*  Every channel strip carries a real meter: float RMS + true-peak    */
-/*  analyser tap on the channel gain (engine.levelInfo), smoothed RMS  */
-/*  fill, instant peak cap, 1.5 s peak-hold, dBFS tick scale and a     */
-/*  latching clip LED. The master strip has an L/R meter bridge fed    */
-/*  by a channel-splitter (engine.masterLevels). Buses D/B/M get       */
-/*  horizontal bridge meters. Volume/pan/EQ reset on double-click.     */
+/*  A real strip console, not a card grid:                             */
+/*   · channel strips with long-throw faders (dB taper tick scale),    */
+/*     rotary EQ L/M/H + PAN + DLY/REV sends + DUCK knobs, M/S and     */
+/*     D/B/M bus routing                                               */
+/*   · float RMS + true-peak meters beside every fader                 */
+/*     (engine.levelInfo), peak-hold line and latching clip LED        */
+/*   · D/B/M group bridge strips + a MASTER strip with stereo L/R      */
+/*     meters (engine.masterLevels), master fader, live LUFS + CPU     */
+/*   · everything live runs through rAF getters — zero React           */
+/*     re-renders while the transport rolls                            */
+/*   · drag faders/knobs · Shift = fine · double-click = reset         */
 /* ------------------------------------------------------------------ */
 
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import type { BusName, Project, Track } from "@/lib/daw/types";
 import { cn } from "@/lib/utils";
-import { Meter, ProMeter } from "./ui";
+import { ProMeter } from "./ui";
+import { Knob, VFader } from "./console";
 
 const BUS_OPTS: Array<{ id: BusName; label: string }> = [
   { id: "drums", label: "D" },
@@ -45,6 +51,22 @@ const fmtCpu = (n: number) => `${Math.round(n)}%`;
 const fmtDb = (db: number) => (db <= -59.5 ? "−∞" : `${db > -9.95 ? "+" : ""}${db.toFixed(1)}`);
 /** volume 0..1.3 → dB (0 dB at unity) */
 const volDb = (v: number) => (v <= 0.001 ? "−∞ dB" : `${v >= 1 ? "+" : ""}${(20 * Math.log10(v)).toFixed(1)} dB`);
+
+const fmtPan = (p: number) => (p === 0 ? "C" : p < 0 ? `L${Math.round(-p * 100)}` : `R${Math.round(p * 100)}`);
+const fmtPct = (v: number) => `${Math.round(v * 100)}`;
+const fmtEq = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(0)}`;
+
+/** fader tick scale — volume 0..1.3 mapped linearly, ticks at real dB points */
+const FADER_TICKS: Array<[number, string]> = [
+  [1.3, "+2.3"],
+  [1.0, "0"],
+  [0.501, "−6"],
+  [0.251, "−12"],
+  [0.063, "−24"],
+  [0.0005, "−∞"],
+];
+
+const FADER_H = 218;
 
 /** DOM-level readout polled at ~4 Hz via rAF — keeps the memoised mixer from re-rendering.
  *  `holdMs` applies a peak-hold to the polled value (used for dB readouts so they
@@ -87,6 +109,312 @@ function LiveReadout({
   return <span ref={ref}>{fallback}</span>;
 }
 
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="w-full text-center font-mono text-[6.5px] uppercase tracking-[0.18em] text-[#6f675c]">
+      {children}
+    </div>
+  );
+}
+
+function Screw({ className }: { className?: string }) {
+  return <span aria-hidden className={cn("h-1.5 w-1.5 shrink-0 rounded-full bg-black/70 ring-1 ring-white/10", className)} />;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Channel strip                                                      */
+/* ------------------------------------------------------------------ */
+
+function ChannelStrip({
+  t,
+  index,
+  anySolo,
+  setTrack,
+  info,
+}: {
+  t: Track;
+  index: number;
+  anySolo: boolean;
+  setTrack: (id: string, patch: Partial<Track>) => void;
+  /** per-channel level getter (engine.levelInfo or mono fallback) */
+  info: (id: string) => LevelInfo;
+}) {
+  const audible = !t.muted && (!anySolo || t.solo);
+  const busColor = BUS_COLORS[t.bus] ?? "#8fbf6b";
+  const getMeter = useCallback(() => info(t.id), [info, t.id]);
+  const set = useCallback((patch: Partial<Track>) => setTrack(t.id, patch), [setTrack, t.id]);
+
+  return (
+    <div
+      className={cn(
+        "relative flex w-[76px] shrink-0 flex-col items-center gap-1 px-1 pb-2 pt-1.5",
+        audible ? "bg-gradient-to-b from-[#17120c] to-[#100c08]" : "bg-gradient-to-b from-[#12100c] to-[#0e0c08]"
+      )}
+    >
+      {/* bus accent */}
+      <span
+        aria-hidden
+        className="absolute inset-x-0 top-0 h-[2px]"
+        style={{ background: busColor, opacity: audible ? 0.95 : 0.3 }}
+      />
+
+      {/* channel number + live dB */}
+      <div className="flex w-full items-center justify-between px-0.5">
+        <span className="font-mono text-[6.5px] text-[#6f675c]">{String(index + 1).padStart(2, "0")}</span>
+        <span className="font-mono text-[6.5px] text-[#a89f91]">
+          <LiveReadout
+            get={() => info(t.id).db}
+            format={fmtDb}
+            fallback="−∞"
+            holdMs={400}
+          />
+        </span>
+      </div>
+
+      {/* EQ */}
+      <div className="grid w-full grid-cols-3 justify-items-center">
+        <Knob label="L" size={23} min={-12} max={12} step={0.5} value={t.eqLow} onChange={(v) => set({ eqLow: v })} resetTo={0} bipolar accent="#e5c15a" format={fmtEq} title="Low shelf 90 Hz" />
+        <Knob label="M" size={23} min={-12} max={12} step={0.5} value={t.eqMid} onChange={(v) => set({ eqMid: v })} resetTo={0} bipolar accent="#d97b5a" format={fmtEq} title="Peak 1 kHz" />
+        <Knob label="H" size={23} min={-12} max={12} step={0.5} value={t.eqHigh} onChange={(v) => set({ eqHigh: v })} resetTo={0} bipolar accent="#8fbf6b" format={fmtEq} title="High shelf 7.5 kHz" />
+      </div>
+      <SectionLabel>EQ</SectionLabel>
+
+      {/* PAN */}
+      <Knob label="PAN" size={30} min={-1} max={1} step={0.02} value={t.pan} onChange={(v) => set({ pan: v })} resetTo={0} bipolar format={fmtPan} title="Stereo position" />
+
+      {/* SENDS */}
+      <div className="grid w-full grid-cols-2 justify-items-center">
+        <Knob label="DLY" size={23} value={t.delaySend} onChange={(v) => set({ delaySend: v })} resetTo={0} accent="#8fbf6b" format={fmtPct} title="Delay send (dotted 8th)" />
+        <Knob label="REV" size={23} value={t.reverbSend} onChange={(v) => set({ reverbSend: v })} resetTo={0} accent="#8fbf6b" format={fmtPct} title="Reverb send" />
+      </div>
+      <SectionLabel>Send</SectionLabel>
+
+      {/* SIDECHAIN DUCK */}
+      <Knob label="DUCK" size={23} value={t.duck} onChange={(v) => set({ duck: v })} resetTo={0} accent="#e5533d" format={fmtPct} title="Kick sidechain depth — ducks on every kick" />
+
+      {/* M / S */}
+      <div className="flex w-full gap-1 px-0.5">
+        <button
+          onClick={() => set({ muted: !t.muted })}
+          aria-pressed={t.muted}
+          title={t.muted ? "Unmute" : "Mute"}
+          className={cn(
+            "h-5 flex-1 rounded font-mono text-[9px] font-bold transition-colors",
+            t.muted ? "bg-[#e5533d] text-white" : "bg-white/5 text-[#a89f91] hover:bg-white/10"
+          )}
+        >
+          M
+        </button>
+        <button
+          onClick={() => set({ solo: !t.solo })}
+          aria-pressed={t.solo}
+          title={t.solo ? "Un-solo" : "Solo"}
+          className={cn(
+            "h-5 flex-1 rounded font-mono text-[9px] font-bold transition-colors",
+            t.solo ? "bg-[#f2a43a] text-[#17120a]" : "bg-white/5 text-[#a89f91] hover:bg-white/10"
+          )}
+        >
+          S
+        </button>
+      </div>
+
+      {/* meter + fader */}
+      <div className="mt-1 flex w-full items-stretch justify-center gap-1" style={{ height: FADER_H }}>
+        <ProMeter getInfo={getMeter} className="h-full w-[13px]" />
+        <VFader
+          value={t.volume}
+          min={0}
+          max={1.3}
+          step={0.01}
+          onChange={(v) => set({ volume: v })}
+          resetTo={1}
+          height={FADER_H}
+          ticks={FADER_TICKS}
+          accent={t.color}
+          label={`Fader ${t.name}`}
+          format={volDb}
+          className="w-[26px]"
+        />
+      </div>
+      <span className="font-mono text-[7px] text-[#a89f91]" aria-hidden>
+        {volDb(t.volume)}
+      </span>
+
+      {/* bus routing */}
+      <div className="flex w-full overflow-hidden rounded-md ring-1 ring-inset ring-white/10" role="group" aria-label={`Bus routing ${t.name}`}>
+        {BUS_OPTS.map((b) => (
+          <button
+            key={b.id}
+            onClick={() => set({ bus: b.id })}
+            title={`Route to ${b.id} bus`}
+            aria-pressed={t.bus === b.id}
+            className={cn(
+              "h-4.5 flex-1 font-mono text-[8px] font-bold transition-colors",
+              t.bus === b.id ? "text-[#17120a]" : "bg-white/5 text-[#a89f91] hover:bg-white/10"
+            )}
+            style={t.bus === b.id ? { background: BUS_COLORS[b.id] } : undefined}
+          >
+            {b.label}
+          </button>
+        ))}
+      </div>
+
+      {/* name plate */}
+      <div
+        className="w-full rounded-sm bg-black/45 px-1 py-1 text-center"
+        style={{ borderTop: `2px solid ${t.color}` }}
+        title={`${t.name} — ${t.kind === "drum" ? "drum" : "synth"} channel`}
+      >
+        <div className="truncate text-[9px] font-semibold leading-tight text-[#f0ece4]">{t.name}</div>
+        <div className="font-mono text-[6px] uppercase tracking-[0.15em] text-[#6f675c]">
+          {t.kind === "drum" ? "DRUM" : "SYNTH"}
+          {t.duck > 0 ? " · SC" : ""}
+        </div>
+      </div>
+
+      {!audible && (
+        <div className="w-full rounded bg-black/40 py-0.5 text-center font-mono text-[6.5px] uppercase tracking-widest text-[#e5533d]">
+          {t.muted ? "muted" : "not soloed"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Group bus bridge strip                                             */
+/* ------------------------------------------------------------------ */
+
+function BusStrip({
+  id,
+  members,
+  getMeter,
+}: {
+  id: BusName;
+  members: number;
+  getMeter: () => { rms: number; peak: number };
+}) {
+  return (
+    <div className="flex w-[58px] shrink-0 flex-col items-center gap-1 bg-gradient-to-b from-[#151009] to-[#100c08] px-1 pb-2 pt-1.5">
+      <span className="font-mono text-[7.5px] font-bold uppercase tracking-[0.15em]" style={{ color: BUS_COLORS[id] }}>
+        {id}
+      </span>
+      <div className="flex w-full items-stretch justify-center" style={{ height: FADER_H }}>
+        <ProMeter getInfo={getMeter} showTicks={false} className="h-full w-[16px]" />
+      </div>
+      <span className="font-mono text-[7px] text-[#a89f91]">{members} ch</span>
+      <SectionLabel>bridge</SectionLabel>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Master strip                                                       */
+/* ------------------------------------------------------------------ */
+
+function MasterStrip({
+  project,
+  updateProject,
+  masterLevels,
+  getMasterLufs,
+  getCpu,
+  hasStereo,
+}: {
+  project: Project;
+  updateProject: (fn: (p: Project) => Project) => void;
+  masterLevels: () => MasterLevels;
+  getMasterLufs?: () => number;
+  getCpu?: () => number;
+  hasStereo: boolean;
+}) {
+  const getL = useCallback(() => {
+    const m = masterLevels();
+    return { rms: m.lRms, peak: m.lPeak };
+  }, [masterLevels]);
+  const getR = useCallback(() => {
+    const m = masterLevels();
+    return { rms: m.rRms, peak: m.rPeak };
+  }, [masterLevels]);
+
+  return (
+    <div className="relative flex w-[116px] shrink-0 flex-col items-center gap-1.5 bg-gradient-to-b from-[#1e160b] to-[#120d07] px-2 pb-2 pt-1.5">
+      <span aria-hidden className="absolute inset-x-0 top-0 h-[2px] bg-[#f2a43a]" />
+      <div className="flex w-full items-center justify-between px-0.5">
+        <span className="font-mono text-[7px] font-bold tracking-[0.2em] text-[#f2a43a]">MASTER</span>
+        <span className="font-mono text-[6px] tracking-[0.15em] text-[#6f675c]">MAIN OUT</span>
+      </div>
+
+      {/* fader + stereo meters */}
+      <div className="flex w-full items-stretch justify-center gap-1.5" style={{ height: FADER_H }}>
+        <VFader
+          value={project.masterVolume}
+          min={0}
+          max={1.3}
+          step={0.01}
+          onChange={(v) => updateProject((p) => ({ ...p, masterVolume: v }))}
+          resetTo={1}
+          height={FADER_H}
+          ticks={FADER_TICKS}
+          accent="#f2a43a"
+          label="Master fader"
+          format={volDb}
+          className="w-[26px]"
+        />
+        {hasStereo ? (
+          <>
+            <ProMeter getInfo={getL} className="h-full w-[13px]" />
+            <ProMeter getInfo={getR} className="h-full w-[13px]" />
+          </>
+        ) : (
+          <div className="flex w-[30px] items-stretch justify-center">
+            <ProMeter getInfo={() => ({ rms: masterLevels().lRms, peak: masterLevels().lPeak })} className="h-full w-[13px]" />
+          </div>
+        )}
+      </div>
+
+      {/* L/R + fader readouts */}
+      <div className="flex w-full justify-between px-0.5 font-mono text-[6.5px] text-[#a89f91]">
+        <span>
+          L <LiveReadout get={hasStereo ? () => masterLevels().dbL : undefined} format={fmtDb} fallback="−∞" holdMs={400} />
+        </span>
+        <span>{volDb(project.masterVolume)}</span>
+        <span>
+          R <LiveReadout get={hasStereo ? () => masterLevels().dbR : undefined} format={fmtDb} fallback="−∞" holdMs={400} />
+        </span>
+      </div>
+
+      {/* live master metering */}
+      <div className="grid w-full grid-cols-2 gap-1">
+        <div className="rounded bg-black/45 px-1 py-1 text-center" title="Integrated loudness (approx LUFS) of the live master">
+          <div className="font-mono text-[6px] uppercase tracking-wider text-[#6f675c]">LUFS</div>
+          <div className="font-mono text-[9px] text-[#f2a43a]">
+            <LiveReadout get={getMasterLufs} format={fmtLufs} fallback="—" />
+          </div>
+        </div>
+        <div className="rounded bg-black/45 px-1 py-1 text-center" title="Estimated engine load">
+          <div className="font-mono text-[6px] uppercase tracking-wider text-[#6f675c]">CPU</div>
+          <div className="font-mono text-[9px] text-[#8fbf6b]">
+            <LiveReadout get={getCpu} format={fmtCpu} fallback="—" />
+          </div>
+        </div>
+      </div>
+
+      <div className="w-full rounded bg-black/45 px-1 py-1 text-center" title="Master bus chain">
+        <div className="font-mono text-[6px] uppercase tracking-wider text-[#6f675c]">limiter · glue</div>
+        <div className="font-mono text-[8px] text-[#f2a43a]">ON · −4 dB</div>
+      </div>
+      <div className="w-full rounded bg-black/45 px-1 py-1 text-center">
+        <div className="font-mono text-[6px] uppercase tracking-wider text-[#6f675c]">song key</div>
+        <div className="font-mono text-[8px] text-[#f0ece4]">{project.songKey}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Tab                                                                */
+/* ------------------------------------------------------------------ */
+
 function MixerTabInner({
   project,
   updateProject,
@@ -110,68 +438,59 @@ function MixerTabInner({
   /** rough engine load 0..100 — renders "—" when absent */
   getCpu?: () => number;
 }) {
-  const setTrack = (id: string, patch: Partial<Track>) => {
-    updateProject((p) => ({
-      ...p,
-      tracks: p.tracks.map((t) => (t.id === id ? ({ ...t, ...patch } as typeof t) : t)),
-    }));
-  };
+  const setTrack = useCallback(
+    (id: string, patch: Partial<Track>) => {
+      updateProject((p) => ({
+        ...p,
+        tracks: p.tracks.map((t) => (t.id === id ? ({ ...t, ...patch } as typeof t) : t)),
+      }));
+    },
+    [updateProject]
+  );
 
   const anySolo = project.tracks.some((t) => t.solo);
 
-  const levelInfo = useMemo(
-    () => getLevelInfo ?? ((id: string) => ({ ...SILENT, rms: getLevel(id), peak: getLevel(id) })),
+  const info = useCallback(
+    (id: string): LevelInfo => {
+      if (getLevelInfo) return getLevelInfo(id);
+      const v = getLevel(id);
+      return { rms: v, peak: v, db: -60 };
+    },
     [getLevelInfo, getLevel]
   );
-  const masterLevels = useMemo(
-    () =>
-      getMasterLevels ??
-      (() => {
-        const v = getMasterLevel();
-        return { ...SILENT_LR, lRms: v, lPeak: v, rRms: v, rPeak: v };
-      }),
+
+  const masterLevels = useCallback(
+    (): MasterLevels =>
+      getMasterLevels
+        ? getMasterLevels()
+        : (() => {
+            const v = getMasterLevel();
+            return { ...SILENT_LR, lRms: v, lPeak: v, rRms: v, rPeak: v };
+          })(),
     [getMasterLevels, getMasterLevel]
   );
 
-  // bus group meters — visual only (the engine routes buses internally)
+  // bus group meters — visual bridge (the engine routes buses internally)
   const busMembers = useMemo(() => {
     const byBus: Record<BusName, string[]> = { drums: [], bass: [], music: [] };
     for (const t of project.tracks) byBus[t.bus].push(t.id);
     return byBus;
   }, [project.tracks]);
 
-  const busGetters = useMemo(
-    () => ({
-      drums: () => {
-        let peak = 0;
-        for (const id of busMembers.drums) {
-          const i = levelInfo(id);
-          if (i.peak > peak) peak = i.peak;
-        }
-        return { rms: peak * 0.82, peak };
-      },
-      bass: () => {
-        let peak = 0;
-        for (const id of busMembers.bass) {
-          const i = levelInfo(id);
-          if (i.peak > peak) peak = i.peak;
-        }
-        return { rms: peak * 0.82, peak };
-      },
-      music: () => {
-        let peak = 0;
-        for (const id of busMembers.music) {
-          const i = levelInfo(id);
-          if (i.peak > peak) peak = i.peak;
-        }
-        return { rms: peak * 0.82, peak };
-      },
-    }),
-    [busMembers, levelInfo]
-  );
+  const busGetters = useMemo(() => {
+    const make = (bus: BusName) => () => {
+      let peak = 0;
+      for (const id of busMembers[bus]) {
+        const i = info(id);
+        if (i.peak > peak) peak = i.peak;
+      }
+      return { rms: peak * 0.82, peak };
+    };
+    return { drums: make("drums"), bass: make("bass"), music: make("music") };
+  }, [busMembers, info]);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {/* legend */}
       <div className="flex flex-wrap items-center gap-3 font-mono text-[9px] uppercase tracking-wider text-[#a89f91]">
         <span className="tracking-[0.2em] text-[#f2a43a]">Console</span>
@@ -181,394 +500,50 @@ function MixerTabInner({
             {b}
           </span>
         ))}
-        <span className="ml-auto hidden sm:inline">double-click a slider to reset · click a clip LED to clear</span>
+        <span className="ml-auto hidden sm:inline">
+          drag faders &amp; knobs · shift = fine · double-click = reset · click a clip LED to clear
+        </span>
       </div>
 
-      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-        {project.tracks.map((t) => {
-          const audible = !t.muted && (!anySolo || t.solo);
-          const busColor = BUS_COLORS[t.bus] ?? "#8fbf6b";
-          return (
-            <div
-              key={t.id}
-              className={cn(
-                "relative overflow-hidden rounded-xl border p-3",
-                audible ? "border-white/5 bg-[#14100d]" : "border-white/5 bg-[#14100d]/60"
-              )}
-            >
-              {/* bus accent */}
-              <span
-                className="absolute inset-x-0 top-0 h-0.5"
-                style={{ background: busColor, opacity: audible ? 0.9 : 0.3 }}
-                aria-hidden
-              />
-              <div className="flex items-center gap-2 pb-2">
-                <span
-                  className="h-2.5 w-2.5 shrink-0 rounded-full"
-                  style={{ background: t.color, boxShadow: `0 0 8px ${t.color}66` }}
-                />
-                <span className="truncate text-[13px] font-semibold text-[#f0ece4]">
-                  {t.name}
-                </span>
-                <span className="ml-auto font-mono text-[9px] uppercase text-[#a89f91]">
-                  {t.kind === "drum" ? "DRUM" : "SYNTH"}
-                </span>
-              </div>
-              {/* group bus routing */}
-              <div className="mb-2 flex items-center gap-1.5">
-                <span className="font-mono text-[9px] uppercase text-[#a89f91]">Bus</span>
-                <div className="ml-auto flex overflow-hidden rounded-md ring-1 ring-inset ring-white/10" role="group" aria-label="Group bus">
-                  {BUS_OPTS.map((b) => (
-                    <button
-                      key={b.id}
-                      onClick={() => setTrack(t.id, { bus: b.id })}
-                      title={`Route to ${b.id} bus`}
-                      aria-pressed={t.bus === b.id}
-                      className={cn(
-                        "h-5 w-7 font-mono text-[9px] font-bold transition-colors",
-                        t.bus === b.id ? "text-[#17120a]" : "bg-white/5 text-[#a89f91] hover:bg-white/10"
-                      )}
-                      style={t.bus === b.id ? { background: BUS_COLORS[b.id] } : undefined}
-                    >
-                      {b.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* meter + faders */}
-              <div className="flex gap-2.5">
-                <div className="flex w-9 shrink-0 flex-col items-center gap-1">
-                  {getLevelInfo ? (
-                    <ProMeter getInfo={() => levelInfo(t.id)} className="h-24 flex-1" />
-                  ) : (
-                    <div className="relative h-24 w-1.5 shrink-0 overflow-hidden rounded-full bg-black/50">
-                      <Meter get={() => getLevel(t.id)} vertical className="h-full w-full bg-transparent ring-0" />
-                    </div>
-                  )}
-                  <span className="font-mono text-[9px] text-[#a89f91]">
-                    <LiveReadout
-                      get={getLevelInfo ? () => levelInfo(t.id).db : undefined}
-                      format={fmtDb}
-                      fallback="−∞"
-                      holdMs={400}
-                    />
-                  </span>
-                </div>
-                <div className="min-w-0 flex-1 space-y-2">
-                  <div>
-                    <div className="mb-0.5 flex justify-between font-mono text-[9px] uppercase text-[#a89f91]">
-                      <span>Vol</span>
-                      <span className="text-[#f0ece4]">{volDb(t.volume)}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min={0}
-                      max={1.3}
-                      step={0.01}
-                      value={t.volume}
-                      onChange={(e) => setTrack(t.id, { volume: Number(e.target.value) })}
-                      onDoubleClick={() => setTrack(t.id, { volume: 1 })}
-                      title="Double-click to reset to 0 dB"
-                      aria-label={`Volume ${volDb(t.volume)}`}
-                      className="h-1 w-full cursor-pointer appearance-none rounded-full bg-white/10 accent-[#f2a43a]"
-                    />
-                  </div>
-                  <div>
-                    <div className="mb-0.5 flex justify-between font-mono text-[9px] uppercase text-[#a89f91]">
-                      <span>Pan</span>
-                      <span className="text-[#f0ece4]">
-                        {t.pan === 0 ? "C" : t.pan < 0 ? `L${Math.round(-t.pan * 100)}` : `R${Math.round(t.pan * 100)}`}
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min={-1}
-                      max={1}
-                      step={0.02}
-                      value={t.pan}
-                      onChange={(e) => setTrack(t.id, { pan: Number(e.target.value) })}
-                      onDoubleClick={() => setTrack(t.id, { pan: 0 })}
-                      title="Double-click to center"
-                      aria-label={`Pan ${t.pan === 0 ? "center" : t.pan < 0 ? `left ${Math.round(-t.pan * 100)}` : `right ${Math.round(t.pan * 100)}`}`}
-                      className="h-1 w-full cursor-pointer appearance-none rounded-full bg-white/10 accent-[#f2a43a]"
-                    />
-                  </div>
-                  <div className="flex gap-1">
-                    <button
-                      onClick={() => setTrack(t.id, { muted: !t.muted })}
-                      className={cn(
-                        "h-5 flex-1 rounded font-mono text-[9px] font-bold",
-                        t.muted ? "bg-[#e5533d] text-white" : "bg-white/5 text-[#a89f91] hover:bg-white/10"
-                      )}
-                    >
-                      M
-                    </button>
-                    <button
-                      onClick={() => setTrack(t.id, { solo: !t.solo })}
-                      className={cn(
-                        "h-5 flex-1 rounded font-mono text-[9px] font-bold",
-                        t.solo ? "bg-[#f2a43a] text-[#17120a]" : "bg-white/5 text-[#a89f91] hover:bg-white/10"
-                      )}
-                    >
-                      S
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* 3-band EQ */}
-              <div className="mt-2 space-y-1 border-t border-white/5 pt-2">
-                <div className="flex justify-between font-mono text-[8px] uppercase tracking-wider text-[#a89f91]">
-                  <span>EQ</span>
-                  <span>
-                    {t.eqLow !== 0 || t.eqMid !== 0 || t.eqHigh !== 0 ? "shaping" : "flat"}
-                  </span>
-                </div>
-                {(
-                  [
-                    ["eqLow", "L", "accent-[#e5c15a]"],
-                    ["eqMid", "M", "accent-[#d97b5a]"],
-                    ["eqHigh", "H", "accent-[#8fbf6b]"],
-                  ] as const
-                ).map(([key, label, accent]) => (
-                  <div key={key} className="flex items-center gap-1.5">
-                    <span className="w-3 font-mono text-[9px] text-[#a89f91]">{label}</span>
-                    <input
-                      type="range"
-                      min={-12}
-                      max={12}
-                      step={0.5}
-                      value={t[key]}
-                      onChange={(e) => setTrack(t.id, { [key]: Number(e.target.value) } as Partial<Track>)}
-                      onDoubleClick={() => setTrack(t.id, { [key]: 0 } as Partial<Track>)}
-                      title="Double-click to reset"
-                      className={cn("h-1 flex-1 cursor-pointer appearance-none rounded-full bg-white/10", accent)}
-                      aria-label={`${label} EQ ${Math.round(t[key])} dB`}
-                    />
-                    <span
-                      className={cn(
-                        "w-8 text-right font-mono text-[9px]",
-                        t[key] === 0 ? "text-[#a89f91]" : "text-[#f0ece4]"
-                      )}
-                    >
-                      {t[key] > 0 ? "+" : ""}
-                      {t[key].toFixed(1)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-
-              <div className="mt-1.5 space-y-1.5 border-t border-white/5 pt-2">
-                <div className="flex items-center gap-1.5">
-                  <span className="w-8 font-mono text-[9px] uppercase text-[#a89f91]">Dly</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    value={t.delaySend}
-                    onChange={(e) => setTrack(t.id, { delaySend: Number(e.target.value) })}
-                    onDoubleClick={() => setTrack(t.id, { delaySend: 0 })}
-                    title="Double-click to reset"
-                    className="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-white/10 accent-[#8fbf6b]"
-                    aria-label={`Delay send ${Math.round(t.delaySend * 100)}%`}
-                  />
-                  <span className="w-6 text-right font-mono text-[9px] text-[#a89f91]">
-                    {Math.round(t.delaySend * 100)}
-                  </span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="w-8 font-mono text-[9px] uppercase text-[#a89f91]">Rev</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    value={t.reverbSend}
-                    onChange={(e) => setTrack(t.id, { reverbSend: Number(e.target.value) })}
-                    onDoubleClick={() => setTrack(t.id, { reverbSend: 0 })}
-                    title="Double-click to reset"
-                    className="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-white/10 accent-[#8fbf6b]"
-                    aria-label={`Reverb send ${Math.round(t.reverbSend * 100)}%`}
-                  />
-                  <span className="w-6 text-right font-mono text-[9px] text-[#a89f91]">
-                    {Math.round(t.reverbSend * 100)}
-                  </span>
-                </div>
-              </div>
-
-              {/* kick sidechain */}
-              <div
-                className="mt-1.5 border-t border-white/5 pt-2"
-                title="Ducks this channel every time the kick hits"
-              >
-                <div className="mb-1 flex items-center gap-1.5">
-                  <span className="font-mono text-[9px] uppercase text-[#a89f91]">Sidechain</span>
-                  <span className="font-mono text-[9px] text-[#f0ece4]">{Math.round(t.duck * 100)}%</span>
-                  <button
-                    onClick={() => setTrack(t.id, { duck: t.duck > 0 ? 0 : 0.6 })}
-                    title="Ducks this channel every time the kick hits"
-                    aria-pressed={t.duck > 0}
-                    className={cn(
-                      "ml-auto h-4 rounded px-1.5 font-mono text-[8px] font-bold uppercase tracking-wider transition-colors",
-                      t.duck > 0
-                        ? "bg-[#f2a43a] text-[#17120a]"
-                        : "bg-white/5 text-[#a89f91] hover:bg-white/10"
-                    )}
-                  >
-                    {t.duck > 0 ? "on" : "off"}
-                  </button>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={t.duck}
-                  onChange={(e) => setTrack(t.id, { duck: Number(e.target.value) })}
-                  onDoubleClick={() => setTrack(t.id, { duck: 0 })}
-                  title="Double-click to reset"
-                  className="h-1 w-full cursor-pointer appearance-none rounded-full bg-white/10 accent-[#e5533d]"
-                  aria-label={`Sidechain duck depth ${Math.round(t.duck * 100)}%`}
-                />
-              </div>
-              {!audible && (
-                <div className="mt-1 rounded bg-black/30 py-0.5 text-center font-mono text-[8px] uppercase tracking-widest text-[#e5533d]">
-                  {t.muted ? "muted" : "not soloed"}
-                </div>
-              )}
-            </div>
-          );
-        })}
-
-        {/* MASTER — L/R meter bridge */}
-        <div className="relative overflow-hidden rounded-xl border border-[#f2a43a]/30 bg-gradient-to-b from-[#1c150c] to-[#14100d] p-3">
-          <span className="absolute inset-x-0 top-0 h-0.5 bg-[#f2a43a]" aria-hidden />
-          <div className="flex items-center gap-2 pb-2">
-            <span className="h-2.5 w-2.5 rounded-full bg-[#f2a43a]" />
-            <span className="text-[13px] font-semibold text-[#f0ece4]">MASTER</span>
-            <span className="ml-auto font-mono text-[9px] uppercase text-[#f2a43a]">MAIN OUT</span>
-          </div>
-
-          <div className="flex gap-2.5">
-            {/* stereo bridge */}
-            <div className="flex w-12 shrink-0 items-end gap-1.5">
-              <div className="flex flex-1 flex-col items-center gap-1">
-                {getMasterLevels ? (
-                  <ProMeter getInfo={() => { const m = masterLevels(); return { rms: m.lRms, peak: m.lPeak }; }} className="h-24 flex-1" />
-                ) : (
-                  <div className="relative h-24 w-1.5 overflow-hidden rounded-full bg-black/50">
-                    <Meter get={getMasterLevel} vertical className="h-full w-full bg-transparent ring-0" />
-                  </div>
-                )}
-                <span className="font-mono text-[9px] text-[#a89f91]">
-                  <LiveReadout get={getMasterLevels ? () => masterLevels().dbL : undefined} format={fmtDb} fallback="−∞" holdMs={400} />
-                </span>
-                <span className="font-mono text-[8px] uppercase text-[#a89f91]/70">L</span>
-              </div>
-              <div className="flex flex-1 flex-col items-center gap-1">
-                {getMasterLevels ? (
-                  <ProMeter getInfo={() => { const m = masterLevels(); return { rms: m.rRms, peak: m.rPeak }; }} className="h-24 flex-1" />
-                ) : (
-                  <div className="relative h-24 w-1.5 overflow-hidden rounded-full bg-black/50">
-                    <Meter get={getMasterLevel} vertical className="h-full w-full bg-transparent ring-0" />
-                  </div>
-                )}
-                <span className="font-mono text-[9px] text-[#a89f91]">
-                  <LiveReadout get={getMasterLevels ? () => masterLevels().dbR : undefined} format={fmtDb} fallback="−∞" holdMs={400} />
-                </span>
-                <span className="font-mono text-[8px] uppercase text-[#a89f91]/70">R</span>
-              </div>
-            </div>
-
-            <div className="min-w-0 flex-1">
-              <div className="mb-0.5 flex justify-between font-mono text-[9px] uppercase text-[#a89f91]">
-                <span>Vol</span>
-                <span className="text-[#f0ece4]">{volDb(project.masterVolume)}</span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={1.3}
-                step={0.01}
-                value={project.masterVolume}
-                onChange={(e) =>
-                  updateProject((p) => ({ ...p, masterVolume: Number(e.target.value) }))
-                }
-                onDoubleClick={() => updateProject((p) => ({ ...p, masterVolume: 1 }))}
-                title="Double-click to reset to 0 dB"
-                aria-label={`Master volume ${volDb(project.masterVolume)}`}
-                className="h-1 w-full cursor-pointer appearance-none rounded-full bg-white/10 accent-[#f2a43a]"
-              />
-              <div className="mt-2 rounded-md bg-black/40 px-2 py-1.5 text-center">
-                <div className="font-mono text-[9px] uppercase tracking-wider text-[#a89f91]">
-                  Limiter · glue
-                </div>
-                <div className="font-mono text-[10px] text-[#f2a43a]">ON · −4 dB</div>
-              </div>
-              <div className="mt-1 rounded-md bg-black/40 px-2 py-1.5 text-center">
-                <div className="font-mono text-[9px] uppercase tracking-wider text-[#a89f91]">
-                  Song key
-                </div>
-                <div className="font-mono text-[10px] text-[#f0ece4]">{project.songKey}</div>
-              </div>
-            </div>
-          </div>
-
-          {/* live master metering — LUFS + CPU (wired by the studio when available) */}
-          <div className="mt-2 grid grid-cols-2 gap-1.5">
-            <div
-              className="rounded-md bg-black/40 px-2 py-1.5 text-center"
-              title="Integrated loudness (approx LUFS) of the live master"
-            >
-              <div className="font-mono text-[9px] uppercase tracking-wider text-[#a89f91]">LUFS</div>
-              <div className="font-mono text-[11px] text-[#f2a43a]">
-                <LiveReadout get={getMasterLufs} format={fmtLufs} fallback="—" />
-              </div>
-            </div>
-            <div
-              className="rounded-md bg-black/40 px-2 py-1.5 text-center"
-              title="Estimated engine load"
-            >
-              <div className="font-mono text-[9px] uppercase tracking-wider text-[#a89f91]">CPU</div>
-              <div className="font-mono text-[11px] text-[#8fbf6b]">
-                <LiveReadout get={getCpu} format={fmtCpu} fallback="—" />
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* BUSES — group bridge meters (the engine routes buses internally) */}
-      <div className="rounded-xl border border-white/8 bg-[#14100d] p-3">
-        <div className="mb-2 flex items-center gap-2">
-          <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#f2a43a]">Buses</span>
-          <span className="font-mono text-[9px] text-[#a89f91]">
-            group bridge meters · routed internally by the engine
+      {/* THE CONSOLE */}
+      <div className="overflow-hidden rounded-xl border border-white/10 bg-[#0f0b08] shadow-[0_10px_40px_rgba(0,0,0,0.45)]">
+        {/* top rail */}
+        <div className="flex items-center gap-2.5 border-b border-black/60 bg-gradient-to-b from-[#241c11] to-[#171209] px-3 py-1.5">
+          <Screw />
+          <span className="font-mono text-[9px] font-bold tracking-[0.3em] text-[#f2a43a]">INTELLIDAW</span>
+          <span className="font-mono text-[7.5px] tracking-[0.2em] text-[#6f675c]">
+            MAIN CONSOLE · {project.tracks.length} CH · 3 BUS · STEREO OUT
           </span>
+          <span className="ml-auto hidden font-mono text-[7.5px] text-[#6f675c] md:inline">
+            {project.bpm} BPM · {project.songKey} · swing {Math.round(project.swing * 100)}%
+          </span>
+          <Screw />
         </div>
-        <div className="grid gap-2 sm:grid-cols-3">
-          {BUS_STRIPS.map((b) => (
-            <div key={b.id} className="rounded-lg bg-black/30 px-2.5 py-2 ring-1 ring-inset ring-white/5">
-              <div className="mb-1.5 flex items-baseline justify-between font-mono text-[9px] uppercase tracking-wider text-[#a89f91]">
-                <span className="flex items-center gap-1.5">
-                  <span className="h-1.5 w-3 rounded-full" style={{ background: BUS_COLORS[b.id] }} />
-                  {b.label}
-                </span>
-                <span className="text-[#f0ece4]">{busMembers[b.id].length} ch</span>
-              </div>
-              {getLevelInfo ? (
-                <ProMeter getInfo={busGetters[b.id]} orientation="horizontal" showTicks={false} className="h-4" />
-              ) : (
-                <Meter get={() => busGetters[b.id]().peak} className="h-2" />
-              )}
-            </div>
-          ))}
+
+        {/* strips — horizontal scroll on narrow screens (console behaviour) */}
+        <div className="overflow-x-auto console-scroll">
+          <div className="flex min-w-max items-stretch divide-x divide-black/50">
+            {project.tracks.map((t, i) => (
+              <ChannelStrip key={t.id} t={t} index={i} anySolo={anySolo} setTrack={setTrack} info={info} />
+            ))}
+            {BUS_STRIPS.map((b) => (
+              <BusStrip key={b.id} id={b.id} members={busMembers[b.id].length} getMeter={busGetters[b.id]} />
+            ))}
+            <MasterStrip
+              project={project}
+              updateProject={updateProject}
+              masterLevels={masterLevels}
+              getMasterLufs={getMasterLufs}
+              getCpu={getCpu}
+              hasStereo={Boolean(getMasterLevels)}
+            />
+          </div>
         </div>
       </div>
+
       <div className="text-center font-mono text-[10px] tracking-wide text-[#a89f91]/70">
-        3-BAND EQ PER CHANNEL (LOW 90HZ · MID 1K · HIGH 7.5K) · BUSES: DOTTED-8TH DELAY + REVERB · SENDS PER CHANNEL
+        3-BAND EQ PER CHANNEL (LOW 90HZ · MID 1K · HIGH 7.5K) · BUSES: DOTTED-8TH DELAY + REVERB · SENDS PER CHANNEL ·
+        KICK SIDECHAIN VIA DUCK KNOB
       </div>
     </div>
   );
